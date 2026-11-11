@@ -1,0 +1,109 @@
+name: Release Build & Publish
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build DMG & Publish Release
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make Scripts Executable
+        run: |
+          chmod +x build_app.sh install.sh
+
+      - name: Run Test Suite
+        run: |
+          swift test
+
+      - name: Build Application and Package DMG
+        run: |
+          ./build_app.sh
+
+      - name: Verify DMG Artifact Exists
+        run: |
+          if [ ! -f "Resource Monitor.dmg" ]; then
+            echo "::error::Resource Monitor.dmg was not generated!"
+            exit 1
+          fi
+          echo "Generated DMG size: $(du -sh "Resource Monitor.dmg" | cut -f1)"
+
+      - name: Extract Release Version
+        id: version_info
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist 2>/dev/null || echo "1.0.0")
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Target Version: ${VERSION} (Tag: ${TAG})"
+
+      - name: Generate Release Notes
+        run: |
+          cat << 'EOF' | sed 's/^          //' > release_notes.md
+          ## Resource Monitor
+
+          Production-ready release of Resource Monitor for macOS 14+ (Apple Silicon).
+
+          ### Telemetry & Features:
+          - Swift 6 strict concurrency architecture (< 1% idle CPU footprint)
+          - Real-time CPU topology (P-cores / E-cores), Memory pressure, Disk I/O, Network, and Power telemetry
+          - GPU Device, Renderer, and Tiler utilization and VRAM tracking
+          - Apple Silicon SoC die, battery, and storage temperatures with fan tachometer / passive cooling display
+          - Process search and category filtering (All, Apps, Daemons, System, High Load) with Rosetta 2 badging
+          - Safe POSIX process termination controls with confirmation dialogs
+          - Integrated GitHub Release update detection
+          - Author Easter egg ("WycDev") with 7-click unlock and celebratory confetti animation
+          - Installable drag-and-drop macOS DMG bundle
+
+          ### Gatekeeper Installation Note:
+          If macOS displays an unsigned developer warning, right-click (Control-click) `Resource Monitor.app` in `/Applications` and select **Open**, or run:
+          ```bash
+          xattr -cr "/Applications/Resource Monitor.app"
+          ```
+          EOF
+
+      - name: Prune Prior GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Querying existing releases..."
+          PREV_RELEASES=$(gh release list --limit 100 --json tagName -q '.[].tagName' || true)
+          if [ -n "$PREV_RELEASES" ]; then
+            for prev_tag in $PREV_RELEASES; do
+              echo "Removing prior release and tag: ${prev_tag}"
+              gh release delete "${prev_tag}" --yes --cleanup-tag || true
+            done
+          else
+            echo "No prior releases found to prune."
+          fi
+
+      - name: Publish Latest GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version_info.outputs.tag }}"
+          VERSION="${{ steps.version_info.outputs.version }}"
+
+          # Remove local or remote tag if it exists
+          git tag -d "${TAG}" 2>/dev/null || true
+          git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+
+          gh release create "${TAG}" "Resource Monitor.dmg" \
+            --title "Resource Monitor v${VERSION}" \
+            --notes-file release_notes.md

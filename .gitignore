@@ -1,0 +1,21 @@
+# Swift Package Manager & Build Artifacts
+.build/
+.tmp/
+.cache/
+Packages/
+Package.resolved
+
+# Application Bundles & Disk Images
+*.app
+*.dmg
+Resource Monitor.app
+System Resource Viewer.app
+main
+
+# macOS & Editor Metadata
+.DS_Store
+*.swp
+*~
+
+# Teamwork Agent Metadata
+.agents/
