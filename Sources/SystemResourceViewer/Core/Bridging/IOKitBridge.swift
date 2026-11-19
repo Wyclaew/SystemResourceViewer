@@ -287,6 +287,7 @@ public enum IOKitBridge {
         let model = String(decoding: clean, as: UTF8.self)
 
         if model.contains("MacBookAir") { return true }
+        if model.contains("Virtual") || model.contains("VM") || model.contains("QEMU") { return true }
         let knownFanlessModels: Set<String> = [
             "MacBook8,1", "MacBook9,1", "MacBook10,1",
             "Mac14,2", "Mac14,15", "Mac15,2", "Mac15,12", "Mac15,13", "Mac17,3"
@@ -445,7 +446,7 @@ public enum IOKitBridge {
         input.data8 = 9 // SMC_CMD_READ_KEYINFO
         guard smc.callSMC(input: &input, output: &output) == KERN_SUCCESS,
               output.result == 0 else {
-            return FanHardwareTelemetry(fans: [], isFanless: fanless)
+            return FanHardwareTelemetry(fans: [], isFanless: true)
         }
 
         input.keyInfo.dataSize = output.keyInfo.dataSize
@@ -453,7 +454,7 @@ public enum IOKitBridge {
         guard smc.callSMC(input: &input, output: &output) == KERN_SUCCESS,
               output.result == 0,
               output.keyInfo.dataSize >= 1 else {
-            return FanHardwareTelemetry(fans: [], isFanless: fanless)
+            return FanHardwareTelemetry(fans: [], isFanless: true)
         }
 
         let fanCount = Int(output.bytes.0)

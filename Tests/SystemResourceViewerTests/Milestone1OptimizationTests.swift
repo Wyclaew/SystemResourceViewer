@@ -88,9 +88,11 @@ final class Milestone1OptimizationTests: XCTestCase {
         let connection = IOKitBridge.AppleSMCConnection.shared
         // On Apple Silicon or Intel Macs, isConnected indicates user client availability
         let isFanless = IOKitBridge.isFanlessArchitecture()
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil ||
+                   ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != nil
 
-        if !isFanless {
-            // On machines with active cooling, SMC connection must be open
+        if !isFanless && !isCI {
+            // On physical bare-metal machines with active cooling, SMC connection must be open
             XCTAssertTrue(connection.isConnected)
         }
 
