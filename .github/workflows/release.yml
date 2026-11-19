@@ -15,7 +15,7 @@ permissions:
 jobs:
   release:
     name: Build DMG & Publish Release
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 25
 
     steps:

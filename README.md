@@ -256,7 +256,7 @@ chmod +x install.sh
 The repository includes a fully automated GitHub Actions release workflow located at `.github/workflows/release.yml`:
 
 - **Triggers**: Automatically runs on push to `main` / `master` and version tag pushes (`v*`).
-- **Runner**: Executes on `macos-14` (Apple Silicon M1 runner).
+- **Runner**: Executes on `macos-latest` (Apple Silicon runner).
 - **Workflow Pipeline**:
   1. Checks out repository code.
   2. Runs `swift test` to ensure all 314 tests pass.
