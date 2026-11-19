@@ -13,12 +13,12 @@ public struct MetricSparklineView: View {
     private let fixedMax: Double?
     private let height: CGFloat
 
-    public init(
-        values: [Double],
+    public init<C: Collection>(
+        values: C,
         tintColor: Color = AdaptiveColor.optimal,
         fixedMax: Double? = 100.0,
         height: CGFloat = 36.0
-    ) {
+    ) where C.Element == Double {
         self.points = values.enumerated().map { DataPoint(id: $0.offset, value: $0.element) }
         self.tintColor = tintColor
         self.fixedMax = fixedMax

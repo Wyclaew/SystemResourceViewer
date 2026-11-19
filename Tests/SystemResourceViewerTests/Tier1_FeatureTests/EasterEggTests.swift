@@ -83,6 +83,7 @@ final class EasterEggTests: XCTestCase {
         XCTAssertTrue(s3.showConfetti)
     }
 
+    @MainActor
     func testConfettiViewParticleGeneration() {
         let confetti = ConfettiView(particleCount: 50, duration: 3.0)
         XCTAssertEqual(confetti.particles.count, 50)

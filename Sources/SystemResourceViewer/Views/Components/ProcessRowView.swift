@@ -13,9 +13,12 @@ public struct ProcessRowView: View {
     private let mode: ProcessMetricMode
     private let isChild: Bool
     private let onAction: ((String) -> Void)?
+    private let onInspect: ((ProcessItem) -> Void)?
     @Binding private var expandedPIDs: Set<pid_t>
 
     @State private var isHovered: Bool = false
+    @State private var showingTerminateAlert: Bool = false
+    @State private var showingGroupTerminateAlert: Bool = false
     @State private var showingForceKillAlert: Bool = false
     @State private var showingGroupForceKillAlert: Bool = false
     @State private var errorMessage: String? = nil
@@ -30,13 +33,15 @@ public struct ProcessRowView: View {
         mode: ProcessMetricMode = .both,
         isChild: Bool = false,
         expandedPIDs: Binding<Set<pid_t>> = .constant([]),
-        onAction: ((String) -> Void)? = nil
+        onAction: ((String) -> Void)? = nil,
+        onInspect: ((ProcessItem) -> Void)? = nil
     ) {
         self.process = process
         self.mode = mode
         self.isChild = isChild
         self._expandedPIDs = expandedPIDs
         self.onAction = onAction
+        self.onInspect = onInspect
     }
 
     /// Children that actually consume resources (filter out 0 CPU / 0 memory noise).
@@ -116,6 +121,21 @@ public struct ProcessRowView: View {
 
                 // Metadata Badges (shown only for valid processes)
                 if process.id > 0 {
+                    // Paused Status Badge (Milestone 3)
+                    if process.isSuspended {
+                        HStack(spacing: 2) {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 7))
+                            Text("Paused")
+                                .font(.system(size: 8.5, weight: .bold))
+                        }
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.yellow.opacity(0.18))
+                        .foregroundStyle(Color.yellow)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
                     // Architecture Badge
                     Text(process.isRosetta ? "Rosetta 2" : "Apple Silicon")
                         .font(.system(size: 8.5, weight: .semibold))
@@ -154,6 +174,7 @@ public struct ProcessRowView: View {
                 // Metrics
                 let cpuDisplay = hasActiveChildren ? process.formattedTotalCPU : process.formattedCPU
                 let memDisplay = hasActiveChildren ? process.formattedTotalMemory : process.formattedMemory
+                let diskDisplay = hasActiveChildren ? process.formattedTotalDiskIO : process.formattedDiskIO
                 let cpuValue = hasActiveChildren ? process.totalCPU : process.cpuPercentage
 
                 switch mode {
@@ -182,21 +203,35 @@ public struct ProcessRowView: View {
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .frame(width: 70, alignment: .trailing)
+
+                        Text(diskDisplay)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 75, alignment: .trailing)
                     }
                 }
 
-                // Hover terminate button (only for real, non-root/init processes)
-                if isHovered && process.id > 1 {
-                    Button {
-                        terminateCurrentProcess(force: false)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
+                // Hover terminate button (only for real, non-protected processes)
+                if isHovered {
+                    if process.isProtected {
+                        Image(systemName: "lock.shield.fill")
                             .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
+                            .help("Protected macOS System Process")
+                            .transition(.opacity)
+                    } else if process.id > 1 {
+                        Button {
+                            showingTerminateAlert = true
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Quit Process (SIGTERM)...")
+                        .transition(.opacity)
                     }
-                    .buttonStyle(.plain)
-                    .help("Quit Process (SIGTERM)")
-                    .transition(.opacity)
                 }
             }
             .padding(.vertical, isChild ? 2 : 5)
@@ -207,6 +242,13 @@ public struct ProcessRowView: View {
                     .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
             )
             .contentShape(Rectangle())
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    if process.id > 0 {
+                        onInspect?(process)
+                    }
+                }
+            )
             .onTapGesture {
                 if hasActiveChildren {
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -221,11 +263,69 @@ public struct ProcessRowView: View {
             .onHover { isHovered = $0 }
             // Right-Click Context Menu
             .contextMenu {
-                if process.id > 1 {
+                if process.id > 0 {
                     Button {
-                        terminateCurrentProcess(force: false)
+                        onInspect?(process)
                     } label: {
-                        Label("Quit (SIGTERM)", systemImage: "xmark.circle")
+                        Label("Inspect Process...", systemImage: "info.circle")
+                    }
+                    Divider()
+                }
+
+                if process.isProtected {
+                    Label("Protected System Component", systemImage: "lock.shield.fill")
+                    Text("This process is protected by ProcessGuard and cannot be terminated or suspended.")
+                        .font(.caption)
+
+                    Divider()
+
+                    Button {
+                        ProcessAction.revealInFinder(pid: process.id)
+                    } label: {
+                        Label("Reveal in Finder", systemImage: "folder")
+                    }
+
+                    Button {
+                        ProcessAction.copyPIDToClipboard(pid: process.id)
+                        onAction?("Copied PID: \(process.id)")
+                    } label: {
+                        Label("Copy PID (\(process.id))", systemImage: "doc.on.doc")
+                    }
+                } else if process.id > 1 {
+                    if process.isSuspended {
+                        Button {
+                            let res = ProcessAction.resume(pid: process.id, name: process.name)
+                            switch res {
+                            case .success:
+                                onAction?("Resumed: \(process.name) (\(process.id))")
+                            case .failure(let reason):
+                                errorMessage = reason
+                                showingErrorAlert = true
+                            }
+                        } label: {
+                            Label("Resume Process (SIGCONT)", systemImage: "play.circle")
+                        }
+                    } else {
+                        Button {
+                            let res = ProcessAction.pause(pid: process.id, name: process.name)
+                            switch res {
+                            case .success:
+                                onAction?("Paused: \(process.name) (\(process.id))")
+                            case .failure(let reason):
+                                errorMessage = reason
+                                showingErrorAlert = true
+                            }
+                        } label: {
+                            Label("Pause Process (SIGSTOP)", systemImage: "pause.circle")
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        showingTerminateAlert = true
+                    } label: {
+                        Label("Quit (SIGTERM)...", systemImage: "xmark.circle")
                     }
 
                     Button(role: .destructive) {
@@ -238,9 +338,9 @@ public struct ProcessRowView: View {
                         Divider()
 
                         Button(role: .destructive) {
-                            terminateEntireGroup(force: false)
+                            showingGroupTerminateAlert = true
                         } label: {
-                            Label("Quit Entire Group (\(activeChildren.count + 1) Processes)", systemImage: "square.stack.3d.down.right.fill")
+                            Label("Quit Entire Group (\(activeChildren.count + 1) Processes)...", systemImage: "square.stack.3d.down.right.fill")
                         }
 
                         Button(role: .destructive) {
@@ -272,6 +372,30 @@ public struct ProcessRowView: View {
             }
             // Confirmation Alert Dialogs
             .confirmationDialog(
+                "Quit \"\(process.name)\"?",
+                isPresented: $showingTerminateAlert,
+                titleVisibility: .visible
+            ) {
+                Button("Quit", role: .destructive) {
+                    terminateCurrentProcess(force: false)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to quit \(process.name) (PID: \(process.id))? This will send SIGTERM to allow graceful shutdown.")
+            }
+            .confirmationDialog(
+                "Quit Group \"\(process.name)\"?",
+                isPresented: $showingGroupTerminateAlert,
+                titleVisibility: .visible
+            ) {
+                Button("Quit All (\(activeChildren.count + 1) Processes)", role: .destructive) {
+                    terminateEntireGroup(force: false)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Are you sure you want to quit \(process.name) and its \(activeChildren.count) child processes?")
+            }
+            .confirmationDialog(
                 "Force Quit \"\(process.name)\"?",
                 isPresented: $showingForceKillAlert,
                 titleVisibility: .visible
@@ -281,7 +405,7 @@ public struct ProcessRowView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Do you want to force quit this process (PID \(process.id))? Any unsaved changes will be lost.")
+                Text("Are you sure you want to force quit \(process.name) (PID: \(process.id))? Any unsaved changes will be lost immediately.")
             }
             .confirmationDialog(
                 "Force Quit Group \"\(process.name)\"?",
@@ -293,7 +417,7 @@ public struct ProcessRowView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Do you want to forcefully terminate \(process.name) and its \(activeChildren.count) child processes? Any unsaved changes will be lost.")
+                Text("Do you want to forcefully terminate \(process.name) and its \(activeChildren.count) child processes? Any unsaved changes will be lost immediately.")
             }
             // Error Alert Dialog
             .alert("Process Action Failed", isPresented: $showingErrorAlert) {
@@ -311,7 +435,8 @@ public struct ProcessRowView: View {
                             mode: mode,
                             isChild: true,
                             expandedPIDs: $expandedPIDs,
-                            onAction: onAction
+                            onAction: onAction,
+                            onInspect: onInspect
                         )
                         .id(child.id)
                     }
@@ -322,12 +447,10 @@ public struct ProcessRowView: View {
     }
 
     private func terminateCurrentProcess(force: Bool) {
-        guard process.id > 1 else {
-            errorMessage = "Cannot terminate system initialization process (PID \(process.id))."
-            showingErrorAlert = true
-            return
-        }
-        let result: ProcessActionResult = force ? ProcessAction.forceKill(pid: process.id) : ProcessAction.terminate(pid: process.id)
+        let result: ProcessActionResult = force
+            ? ProcessAction.forceKill(pid: process.id, name: process.name)
+            : ProcessAction.terminate(pid: process.id, name: process.name)
+
         switch result {
         case .success:
             let verb = force ? "Force quit" : "Terminated"
@@ -339,23 +462,20 @@ public struct ProcessRowView: View {
     }
 
     private func terminateEntireGroup(force: Bool) {
-        guard process.id > 1 else {
-            errorMessage = "Cannot terminate system initialization process (PID \(process.id))."
-            showingErrorAlert = true
-            return
-        }
-
         var failureReasons: [String] = []
 
         for child in process.children {
-            guard child.id > 1 else { continue }
-            let res: ProcessActionResult = force ? ProcessAction.forceKill(pid: child.id) : ProcessAction.terminate(pid: child.id)
+            let res: ProcessActionResult = force
+                ? ProcessAction.forceKill(pid: child.id, name: child.name)
+                : ProcessAction.terminate(pid: child.id, name: child.name)
             if case .failure(let msg) = res {
                 failureReasons.append("\(child.name): \(msg)")
             }
         }
 
-        let parentRes: ProcessActionResult = force ? ProcessAction.forceKill(pid: process.id) : ProcessAction.terminate(pid: process.id)
+        let parentRes: ProcessActionResult = force
+            ? ProcessAction.forceKill(pid: process.id, name: process.name)
+            : ProcessAction.terminate(pid: process.id, name: process.name)
         if case .failure(let msg) = parentRes {
             failureReasons.append("\(process.name): \(msg)")
         }
@@ -366,6 +486,26 @@ public struct ProcessRowView: View {
         } else {
             errorMessage = failureReasons.joined(separator: "\n")
             showingErrorAlert = true
+        }
+    }
+}
+
+// MARK: - Equatable Conformance
+
+extension ProcessRowView: Equatable {
+    public nonisolated static func == (lhs: ProcessRowView, rhs: ProcessRowView) -> Bool {
+        MainActor.assumeIsolated {
+            lhs.process.id == rhs.process.id &&
+            lhs.process.cpuPercentage == rhs.process.cpuPercentage &&
+            lhs.process.memoryBytes == rhs.process.memoryBytes &&
+            lhs.process.totalCPU == rhs.process.totalCPU &&
+            lhs.process.totalMemory == rhs.process.totalMemory &&
+            lhs.process.isSuspended == rhs.process.isSuspended &&
+            lhs.process.diskReadBytesPerSecond == rhs.process.diskReadBytesPerSecond &&
+            lhs.process.diskWriteBytesPerSecond == rhs.process.diskWriteBytesPerSecond &&
+            lhs.isExpanded == rhs.isExpanded &&
+            lhs.mode == rhs.mode &&
+            lhs.isChild == rhs.isChild
         }
     }
 }

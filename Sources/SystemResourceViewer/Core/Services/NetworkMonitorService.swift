@@ -14,7 +14,11 @@ public actor NetworkMonitorService {
     private var lastLatencyCheckTime: Date = Date()
     private var isProbingLatency: Bool = false
 
-    public init() {
+    /// Privacy toggle controlling whether outbound TCP socket probes to 1.1.1.1:53 are allowed.
+    public var allowExternalSocketProbe: Bool = true
+
+    public init(allowExternalSocketProbe: Bool = true) {
+        self.allowExternalSocketProbe = allowExternalSocketProbe
         let monitor = NWPathMonitor()
         self.pathMonitor = monitor
 
@@ -74,7 +78,7 @@ public actor NetworkMonitorService {
         previousSample = (inBytes: currentIn, outBytes: currentOut, time: now)
 
         // Measure network latency every 5 seconds asynchronously in background to avoid blocking polling ticks
-        if currentInterfaceType != .disconnected && now.timeIntervalSince(lastLatencyCheckTime) >= 5.0 && !isProbingLatency {
+        if allowExternalSocketProbe && currentInterfaceType != .disconnected && now.timeIntervalSince(lastLatencyCheckTime) >= 5.0 && !isProbingLatency {
             lastLatencyCheckTime = now
             isProbingLatency = true
             Task { [weak self] in
@@ -90,11 +94,24 @@ public actor NetworkMonitorService {
             primaryInterfaceName: primaryInterfaceName,
             interfaceType: currentInterfaceType,
             localIPv4: ipv4 ?? "—",
-            latencyMilliseconds: lastMeasuredLatencyMs
+            latencyMilliseconds: allowExternalSocketProbe ? lastMeasuredLatencyMs : nil
         )
     }
 
+    /// Dynamically enables or disables external socket probing.
+    public func setAllowExternalSocketProbe(_ allowed: Bool) {
+        self.allowExternalSocketProbe = allowed
+        if !allowed {
+            self.lastMeasuredLatencyMs = nil
+        }
+    }
+
     private func recordLatency(_ latency: Double?) {
+        guard allowExternalSocketProbe else {
+            self.lastMeasuredLatencyMs = nil
+            self.isProbingLatency = false
+            return
+        }
         self.lastMeasuredLatencyMs = latency
         self.isProbingLatency = false
     }

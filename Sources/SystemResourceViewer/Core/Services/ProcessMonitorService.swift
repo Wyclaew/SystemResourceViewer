@@ -25,6 +25,8 @@ public actor ProcessMonitorService {
         let timestamp: UInt64
         let userTimeNs: UInt64
         let systemTimeNs: UInt64
+        let diskBytesRead: UInt64
+        let diskBytesWritten: UInt64
     }
 
     private var previousSamples: [pid_t: ProcessTimeSample] = [:]
@@ -54,6 +56,11 @@ public actor ProcessMonitorService {
             let cpuPercentage: Double
             let residentBytes: UInt64
             let threadCount: Int
+            let isSuspended: Bool
+            let diskReadRate: Double
+            let diskWriteRate: Double
+            let totalDiskRead: UInt64
+            let totalDiskWrite: UInt64
         }
 
         var rawItems: [pid_t: RawItem] = [:]
@@ -70,16 +77,19 @@ public actor ProcessMonitorService {
             var residentBytes: UInt64 = 0
             var threadCount = 1
 
+            let diskIO = DarwinMachBridge.fetchProcessDiskIO(for: pid)
+            let totalRead = diskIO?.bytesRead ?? 0
+            let totalWrite = diskIO?.bytesWritten ?? 0
+            var diskReadRate = 0.0
+            var diskWriteRate = 0.0
+            var userTimeNs: UInt64 = 0
+            var systemTimeNs: UInt64 = 0
+
             if let taskInfo = DarwinMachBridge.fetchProcessTaskInfo(for: pid) {
                 residentBytes = taskInfo.residentBytes
                 threadCount = taskInfo.threadCount
-
-                let currentSample = ProcessTimeSample(
-                    timestamp: nowNs,
-                    userTimeNs: taskInfo.userTimeNs,
-                    systemTimeNs: taskInfo.systemTimeNs
-                )
-                newSamples[pid] = currentSample
+                userTimeNs = taskInfo.userTimeNs
+                systemTimeNs = taskInfo.systemTimeNs
 
                 if let prev = previousSamples[pid] {
                     let timeDeltaNs = nowNs > prev.timestamp ? nowNs - prev.timestamp : 0
@@ -90,9 +100,32 @@ public actor ProcessMonitorService {
                         let rawPercent = (Double(totalWorkNs) / Double(timeDeltaNs)) * 100.0
                         let maxAllowed = Double(max(1, coreCount)) * 100.0
                         cpuPercent = min(maxAllowed, max(0.0, rawPercent))
+
+                        let timeDeltaSec = Double(timeDeltaNs) / 1_000_000_000.0
+                        let readDelta = totalRead >= prev.diskBytesRead ? totalRead - prev.diskBytesRead : 0
+                        let writeDelta = totalWrite >= prev.diskBytesWritten ? totalWrite - prev.diskBytesWritten : 0
+                        diskReadRate = Double(readDelta) / timeDeltaSec
+                        diskWriteRate = Double(writeDelta) / timeDeltaSec
                     }
                 }
+            } else if let prev = previousSamples[pid] {
+                let timeDeltaNs = nowNs > prev.timestamp ? nowNs - prev.timestamp : 0
+                if timeDeltaNs > 0 {
+                    let timeDeltaSec = Double(timeDeltaNs) / 1_000_000_000.0
+                    let readDelta = totalRead >= prev.diskBytesRead ? totalRead - prev.diskBytesRead : 0
+                    let writeDelta = totalWrite >= prev.diskBytesWritten ? totalWrite - prev.diskBytesWritten : 0
+                    diskReadRate = Double(readDelta) / timeDeltaSec
+                    diskWriteRate = Double(writeDelta) / timeDeltaSec
+                }
             }
+
+            newSamples[pid] = ProcessTimeSample(
+                timestamp: nowNs,
+                userTimeNs: userTimeNs,
+                systemTimeNs: systemTimeNs,
+                diskBytesRead: totalRead,
+                diskBytesWritten: totalWrite
+            )
 
             rawItems[pid] = RawItem(
                 pid: pid,
@@ -101,7 +134,12 @@ public actor ProcessMonitorService {
                 name: entry.name,
                 cpuPercentage: cpuPercent,
                 residentBytes: residentBytes,
-                threadCount: threadCount
+                threadCount: threadCount,
+                isSuspended: entry.isSuspended,
+                diskReadRate: diskReadRate,
+                diskWriteRate: diskWriteRate,
+                totalDiskRead: totalRead,
+                totalDiskWrite: totalWrite
             )
         }
 
@@ -130,7 +168,12 @@ public actor ProcessMonitorService {
                 fallbackName: raw.name,
                 cpu: raw.cpuPercentage,
                 memory: raw.residentBytes,
-                threadCount: raw.threadCount
+                threadCount: raw.threadCount,
+                isSuspended: raw.isSuspended,
+                diskReadRate: raw.diskReadRate,
+                diskWriteRate: raw.diskWriteRate,
+                totalDiskRead: raw.totalDiskRead,
+                totalDiskWrite: raw.totalDiskWrite
             )
             itemMap[pid] = item
         }
@@ -216,7 +259,12 @@ public actor ProcessMonitorService {
         fallbackName: String,
         cpu: Double,
         memory: UInt64,
-        threadCount: Int
+        threadCount: Int,
+        isSuspended: Bool = false,
+        diskReadRate: Double = 0.0,
+        diskWriteRate: Double = 0.0,
+        totalDiskRead: UInt64 = 0,
+        totalDiskWrite: UInt64 = 0
     ) -> ProcessItem {
         let (name, bundleId, icon, path, arch, category) = resolveProcessMetadata(for: pid, uid: uid, fallbackName: fallbackName)
         let owner = resolveUsername(for: uid)
@@ -234,7 +282,12 @@ public actor ProcessMonitorService {
             threadCount: threadCount,
             ownerUser: owner,
             executablePath: path,
-            category: category
+            category: category,
+            isSuspended: isSuspended,
+            diskReadBytesPerSecond: diskReadRate,
+            diskWriteBytesPerSecond: diskWriteRate,
+            totalDiskReadBytes: totalDiskRead,
+            totalDiskWriteBytes: totalDiskWrite
         )
     }
 
@@ -242,12 +295,7 @@ public actor ProcessMonitorService {
         if let cached = usernameCache[uid] {
             return cached
         }
-        let resolved: String
-        if let pwd = getpwuid(uid) {
-            resolved = String(cString: pwd.pointee.pw_name)
-        } else {
-            resolved = "\(uid)"
-        }
+        let resolved = DarwinMachBridge.resolveUsername(for: uid) ?? "\(uid)"
         usernameCache[uid] = resolved
         return resolved
     }
@@ -258,9 +306,9 @@ public actor ProcessMonitorService {
         fallbackName: String
     ) -> (name: String, bundleId: String?, icon: NSImage, path: String?, arch: String, category: ProcessCategory) {
         if let cachedName = nameCache[pid],
-           let cachedIcon = iconCache[pid],
-           let cachedArch = architectureCache[pid],
-           let cachedCategory = categoryCache[pid] {
+            let cachedIcon = iconCache[pid],
+            let cachedArch = architectureCache[pid],
+            let cachedCategory = categoryCache[pid] {
             return (cachedName, bundleIdCache[pid], cachedIcon, pathCache[pid], cachedArch, cachedCategory)
         }
 
@@ -289,7 +337,13 @@ public actor ProcessMonitorService {
             }
 
             if resolvedIcon == nil {
-                resolvedIcon = NSWorkspace.shared.icon(forFile: path)
+                if let cached = ProcessItem.IconCache.shared.icon(forPath: path) {
+                    resolvedIcon = cached
+                } else {
+                    let icon = NSWorkspace.shared.icon(forFile: path)
+                    ProcessItem.IconCache.shared.setIcon(icon, forPath: path)
+                    resolvedIcon = icon
+                }
             }
         }
 

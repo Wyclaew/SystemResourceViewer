@@ -111,7 +111,7 @@ public struct NetworkDashboardSection: View {
                 Text("Local IPv4:")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                Text(network.localIPv4)
+                Text(viewModel.privacySettings.sanitize(ipv4: network.localIPv4))
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
                     .monospacedDigit()
                     .foregroundStyle(.primary)

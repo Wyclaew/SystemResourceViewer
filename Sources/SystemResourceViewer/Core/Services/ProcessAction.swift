@@ -13,12 +13,10 @@ public enum ProcessAction {
 
     /// Sends SIGTERM to allow graceful process termination, returning detailed result.
     @discardableResult
-    public static func terminate(pid: pid_t) -> ProcessActionResult {
-        guard pid > 1 else {
-            return .failure("Cannot terminate system initialization process (PID \(pid)).")
-        }
-        guard pid != getpid() else {
-            return .failure("Cannot terminate the active Resource Monitor application directly.")
+    public static func terminate(pid: pid_t, name: String? = nil) -> ProcessActionResult {
+        let status = ProcessGuard.protectionStatus(pid: pid, name: name)
+        if status.protected {
+            return .failure(status.reason ?? "Cannot terminate protected process (PID \(pid)).")
         }
         if Darwin.kill(pid, SIGTERM) == 0 {
             return .success
@@ -28,17 +26,41 @@ public enum ProcessAction {
 
     /// Sends SIGKILL to immediately force-terminate an unresponsive process, returning detailed result.
     @discardableResult
-    public static func forceKill(pid: pid_t) -> ProcessActionResult {
-        guard pid > 1 else {
-            return .failure("Cannot terminate system initialization process (PID \(pid)).")
-        }
-        guard pid != getpid() else {
-            return .failure("Cannot terminate the active Resource Monitor application directly.")
+    public static func forceKill(pid: pid_t, name: String? = nil) -> ProcessActionResult {
+        let status = ProcessGuard.protectionStatus(pid: pid, name: name)
+        if status.protected {
+            return .failure(status.reason ?? "Cannot terminate protected process (PID \(pid)).")
         }
         if Darwin.kill(pid, SIGKILL) == 0 {
             return .success
         }
         return mapKillError(errno, pid: pid, signalName: "SIGKILL")
+    }
+
+    /// Sends SIGSTOP to non-destructively suspend/pause an active process, strictly guarded by ProcessGuard.
+    @discardableResult
+    public static func pause(pid: pid_t, name: String? = nil) -> ProcessActionResult {
+        let status = ProcessGuard.protectionStatus(pid: pid, name: name)
+        if status.protected {
+            return .failure(status.reason ?? "Cannot pause protected process (PID \(pid)).")
+        }
+        if Darwin.kill(pid, SIGSTOP) == 0 {
+            return .success
+        }
+        return mapKillError(errno, pid: pid, signalName: "SIGSTOP")
+    }
+
+    /// Sends SIGCONT to resume an actively suspended process, strictly guarded by ProcessGuard.
+    @discardableResult
+    public static func resume(pid: pid_t, name: String? = nil) -> ProcessActionResult {
+        let status = ProcessGuard.protectionStatus(pid: pid, name: name)
+        if status.protected {
+            return .failure(status.reason ?? "Cannot resume protected process (PID \(pid)).")
+        }
+        if Darwin.kill(pid, SIGCONT) == 0 {
+            return .success
+        }
+        return mapKillError(errno, pid: pid, signalName: "SIGCONT")
     }
 
     /// Maps POSIX errno to a clear, actionable failure reason.

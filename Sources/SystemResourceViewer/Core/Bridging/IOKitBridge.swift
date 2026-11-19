@@ -37,10 +37,8 @@ public enum IOKitBridge {
 
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            var props: Unmanaged<CFMutableDictionary>?
-            if IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-               let dict = props?.takeRetainedValue() as? [String: Any],
-               let stats = dict["Statistics"] as? [String: Any] {
+            if let statsCF = IORegistryEntryCreateCFProperty(service, "Statistics" as CFString, kCFAllocatorDefault, 0),
+               let stats = statsCF.takeRetainedValue() as? [String: Any] {
                 if let read = stats["Bytes (Read)"] as? Int64, read >= 0 {
                     totalRead += UInt64(read)
                     foundAny = true
@@ -297,67 +295,134 @@ public enum IOKitBridge {
     }
 
     /// Queries fan tachometer RPM values from AppleSMC, or detects fanless operation.
+    // MARK: - Persistent AppleSMC Connection (RAII)
+
+    /// Maintains a persistent Mach user client connection to AppleSMC with RAII lifecycle deallocation.
+    public final class AppleSMCConnection: @unchecked Sendable {
+        public static let shared = AppleSMCConnection()
+
+        public struct SMCVersion {
+            public var major: UInt8 = 0
+            public var minor: UInt8 = 0
+            public var build: UInt8 = 0
+            public var reserved: UInt8 = 0
+            public var release: UInt16 = 0
+            public init() {}
+        }
+        public struct SMCPLimitData {
+            public var version: UInt16 = 0
+            public var length: UInt16 = 0
+            public var cpuPLimit: UInt32 = 0
+            public var gpuPLimit: UInt32 = 0
+            public var memPLimit: UInt32 = 0
+            public init() {}
+        }
+        public struct SMCKeyInfoData {
+            public var dataSize: UInt32 = 0
+            public var dataType: UInt32 = 0
+            public var dataAttributes: UInt8 = 0
+            public init() {}
+        }
+        public struct SMCKeyData {
+            public var key: UInt32 = 0
+            public var vers = SMCVersion()
+            public var pLimitData = SMCPLimitData()
+            public var keyInfo = SMCKeyInfoData()
+            public var result: UInt8 = 0
+            public var status: UInt8 = 0
+            public var data8: UInt8 = 0
+            public var data32: UInt32 = 0
+            public var bytes: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
+                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
+                       (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+            public init() {}
+        }
+
+        private var connection: io_connect_t = 0
+        private let lock = NSLock()
+        private var isOpen: Bool = false
+
+        public init() {
+            openConnection()
+        }
+
+        deinit {
+            closeConnection()
+        }
+
+        private func openConnection() {
+            var iterator: io_iterator_t = 0
+            let matchDict = IOServiceMatching("AppleSMC")
+            let kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator)
+            guard kr == KERN_SUCCESS else { return }
+            defer { IOObjectRelease(iterator) }
+
+            let service = IOIteratorNext(iterator)
+            guard service != 0 else { return }
+            defer { IOObjectRelease(service) }
+
+            var conn: io_connect_t = 0
+            if IOServiceOpen(service, mach_task_self_, 0, &conn) == KERN_SUCCESS {
+                self.connection = conn
+                self.isOpen = true
+            }
+        }
+
+        private func closeConnection() {
+            if isOpen && connection != 0 {
+                IOServiceClose(connection)
+                connection = 0
+                isOpen = false
+            }
+        }
+
+        public var isConnected: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return isOpen && connection != 0
+        }
+
+        public func callSMC(input: inout SMCKeyData, output: inout SMCKeyData) -> kern_return_t {
+            lock.lock()
+            defer { lock.unlock() }
+
+            if !isOpen || connection == 0 {
+                openConnection()
+            }
+            guard isOpen && connection != 0 else {
+                return KERN_FAILURE
+            }
+
+            let inputSize = MemoryLayout<SMCKeyData>.stride
+            var outputSize = MemoryLayout<SMCKeyData>.stride
+            let kr = IOConnectCallStructMethod(connection, 2, &input, inputSize, &output, &outputSize)
+            if kr != KERN_SUCCESS {
+                closeConnection()
+                openConnection()
+                if isOpen && connection != 0 {
+                    return IOConnectCallStructMethod(connection, 2, &input, inputSize, &output, &outputSize)
+                }
+            }
+            return kr
+        }
+
+        public func close() {
+            lock.lock()
+            defer { lock.unlock() }
+            closeConnection()
+        }
+    }
+
+    /// Queries fan tachometer RPM values from AppleSMC, or detects fanless operation.
     public static func fetchFanTelemetry() -> FanHardwareTelemetry {
         let fanless = isFanlessArchitecture()
         if fanless {
             return FanHardwareTelemetry(fans: [], isFanless: true)
         }
 
-        var iterator: io_iterator_t = 0
-        let matchDict = IOServiceMatching("AppleSMC")
-        let kr = IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator)
-        guard kr == KERN_SUCCESS else {
-            return FanHardwareTelemetry(fans: [], isFanless: fanless)
-        }
-        defer { IOObjectRelease(iterator) }
-
-        let service = IOIteratorNext(iterator)
-        guard service != 0 else {
-            return FanHardwareTelemetry(fans: [], isFanless: fanless)
-        }
-        defer { IOObjectRelease(service) }
-
-        var connection: io_connect_t = 0
-        guard IOServiceOpen(service, mach_task_self_, 0, &connection) == KERN_SUCCESS else {
-            return FanHardwareTelemetry(fans: [], isFanless: fanless)
-        }
-        defer { IOServiceClose(connection) }
-
-        // SMC structs for FourCC key queries
-        struct SMCVersion {
-            var major: UInt8 = 0
-            var minor: UInt8 = 0
-            var build: UInt8 = 0
-            var reserved: UInt8 = 0
-            var release: UInt16 = 0
-        }
-        struct SMCPLimitData {
-            var version: UInt16 = 0
-            var length: UInt16 = 0
-            var cpuPLimit: UInt32 = 0
-            var gpuPLimit: UInt32 = 0
-            var memPLimit: UInt32 = 0
-        }
-        struct SMCKeyInfoData {
-            var dataSize: UInt32 = 0
-            var dataType: UInt32 = 0
-            var dataAttributes: UInt8 = 0
-        }
-        struct SMCKeyData {
-            var key: UInt32 = 0
-            var vers = SMCVersion()
-            var pLimitData = SMCPLimitData()
-            var keyInfo = SMCKeyInfoData()
-            var result: UInt8 = 0
-            var status: UInt8 = 0
-            var data8: UInt8 = 0
-            var data32: UInt32 = 0
-            var bytes: (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
-                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
-                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
-                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8) =
-                       (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
-        }
+        let smc = AppleSMCConnection.shared
 
         func fourCC(_ str: String) -> UInt32 {
             var res: UInt32 = 0
@@ -373,25 +438,19 @@ public enum IOKitBridge {
             return res
         }
 
-        func callSMC(conn: io_connect_t, input: inout SMCKeyData, output: inout SMCKeyData) -> kern_return_t {
-            let inputSize = MemoryLayout<SMCKeyData>.stride
-            var outputSize = MemoryLayout<SMCKeyData>.stride
-            return IOConnectCallStructMethod(conn, 2, &input, inputSize, &output, &outputSize)
-        }
-
         // Read fan count: "FNum"
-        var input = SMCKeyData()
-        var output = SMCKeyData()
+        var input = AppleSMCConnection.SMCKeyData()
+        var output = AppleSMCConnection.SMCKeyData()
         input.key = fourCC("FNum")
         input.data8 = 9 // SMC_CMD_READ_KEYINFO
-        guard callSMC(conn: connection, input: &input, output: &output) == KERN_SUCCESS,
+        guard smc.callSMC(input: &input, output: &output) == KERN_SUCCESS,
               output.result == 0 else {
             return FanHardwareTelemetry(fans: [], isFanless: fanless)
         }
 
         input.keyInfo.dataSize = output.keyInfo.dataSize
         input.data8 = 5 // SMC_CMD_READ_BYTES
-        guard callSMC(conn: connection, input: &input, output: &output) == KERN_SUCCESS,
+        guard smc.callSMC(input: &input, output: &output) == KERN_SUCCESS,
               output.result == 0,
               output.keyInfo.dataSize >= 1 else {
             return FanHardwareTelemetry(fans: [], isFanless: fanless)
@@ -405,15 +464,15 @@ public enum IOKitBridge {
         var detectedFans: [FanTelemetry] = []
 
         func readFanRPM(keyStr: String) -> Int? {
-            var inCmd = SMCKeyData()
-            var outCmd = SMCKeyData()
+            var inCmd = AppleSMCConnection.SMCKeyData()
+            var outCmd = AppleSMCConnection.SMCKeyData()
             inCmd.key = fourCC(keyStr)
             inCmd.data8 = 9
-            guard callSMC(conn: connection, input: &inCmd, output: &outCmd) == KERN_SUCCESS,
+            guard smc.callSMC(input: &inCmd, output: &outCmd) == KERN_SUCCESS,
                   outCmd.result == 0 else { return nil }
             inCmd.keyInfo.dataSize = outCmd.keyInfo.dataSize
             inCmd.data8 = 5
-            guard callSMC(conn: connection, input: &inCmd, output: &outCmd) == KERN_SUCCESS,
+            guard smc.callSMC(input: &inCmd, output: &outCmd) == KERN_SUCCESS,
                   outCmd.result == 0,
                   outCmd.keyInfo.dataSize >= 2 else { return nil }
             // Decode fpe2 fixed-point format (14 bits integer, 2 bits fraction)

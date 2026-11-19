@@ -37,8 +37,11 @@ cp ".build/release/SystemResourceViewer" "${MACOS_DIR}/SystemResourceViewer"
 cp "Info.plist" "${CONTENTS_DIR}/Info.plist"
 cp "AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
-echo "Applying ad-hoc code signature..."
-codesign --force --deep --sign - "${BUNDLE_DIR}"
+echo "Applying Hardened Runtime code signature with entitlements..."
+codesign --force --deep \
+    --options runtime \
+    --entitlements "SystemResourceViewer.entitlements" \
+    --sign - "${BUNDLE_DIR}"
 
 # Maintain legacy alias for backwards compatibility
 rm -rf "System Resource Viewer.app"

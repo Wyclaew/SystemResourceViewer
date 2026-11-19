@@ -362,6 +362,7 @@ final class AdversarialStressTests: XCTestCase {
 
     // MARK: - 6. MetricRingGauge NaN / Inf Crash Resilience
 
+    @MainActor
     func testMetricRingGaugeNaNAndInfResilience() {
         // Must not crash on NaN, Infinity, -Infinity, negative, or overflow
         let nanGauge = MetricRingGauge(percentage: Double.nan)

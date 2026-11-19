@@ -2,118 +2,37 @@ import AppKit
 import SwiftUI
 
 /// Sorting attributes for the hierarchical process monitor.
-public enum ProcessSortField {
+public enum ProcessSortField: Sendable {
     case name
     case pid
     case cpu
     case memory
+    case diskIO
 }
 
 /// A clean, minimalist system monitor dashboard inspired by a modern Activity Monitor & Task Manager.
 public struct DashboardWindowView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @State private var searchText: String = ""
-    @State private var selectedCategory: ProcessCategory = .all
-    @State private var sortField: ProcessSortField = .cpu
-    @State private var sortAscending: Bool = false
     @State private var statusFeedback: String?
     @State private var statusFeedbackTimer: Task<Void, Never>?
-    @State private var stableProcessList: [ProcessItem] = []
     @State private var expandedPIDs: Set<pid_t> = []
 
     public init(viewModel: DashboardViewModel) {
         self.viewModel = viewModel
     }
 
-    private func computeProcessList() -> [ProcessItem] {
-        let list = viewModel.metrics.processes
-
-        // 1. Filter by category
-        let categoryFiltered: [ProcessItem]
-        switch selectedCategory {
-        case .all:
-            categoryFiltered = list
-        case .highLoad:
-            categoryFiltered = list.compactMap { item in
-                let matchesSelf = item.totalCPU > 5.0 || item.cpuPercentage > 5.0 || item.totalMemory > (500 * 1024 * 1024)
-                let matchingChildren = item.children.filter { $0.totalCPU > 5.0 || $0.cpuPercentage > 5.0 || $0.totalMemory > (500 * 1024 * 1024) }
-                if matchesSelf {
-                    return item
-                } else if !matchingChildren.isEmpty {
-                    var copy = item
-                    copy.children = matchingChildren
-                    return copy
-                }
-                return nil
-            }
-        case .apps, .daemons, .system:
-            categoryFiltered = list.compactMap { item in
-                let matchesSelf = item.category == selectedCategory
-                let matchingChildren = item.children.filter { $0.category == selectedCategory }
-                if matchesSelf {
-                    return item
-                } else if !matchingChildren.isEmpty {
-                    var copy = item
-                    copy.children = matchingChildren
-                    return copy
-                }
-                return nil
-            }
-        }
-
-        // 2. Filter by search query (checks parent and children)
-        let filtered: [ProcessItem]
-        if searchText.isEmpty {
-            filtered = categoryFiltered
+    private var displayedProcessList: [ProcessItem] {
+        if !viewModel.filteredProcesses.isEmpty {
+            return viewModel.filteredProcesses
+        } else if viewModel.searchText.isEmpty && viewModel.selectedCategory == .all {
+            return viewModel.metrics.processes
         } else {
-            let query = searchText.lowercased()
-            filtered = categoryFiltered.compactMap { item in
-                let matchesSelf = item.name.lowercased().contains(query) ||
-                                  "\(item.id)".contains(query) ||
-                                  item.ownerUser.lowercased().contains(query) ||
-                                  item.architecture.lowercased().contains(query)
-                let matchingChildren = item.children.filter {
-                    $0.name.lowercased().contains(query) ||
-                    "\($0.id)".contains(query) ||
-                    $0.ownerUser.lowercased().contains(query) ||
-                    $0.architecture.lowercased().contains(query)
-                }
-
-                if matchesSelf {
-                    return item
-                } else if !matchingChildren.isEmpty {
-                    var copy = item
-                    copy.children = matchingChildren
-                    return copy
-                } else {
-                    return nil
-                }
-            }
+            return []
         }
-
-        // 3. Sort based on sortField and sortAscending
-        return filtered.sorted { a, b in
-            let result: Bool
-            switch sortField {
-            case .cpu:
-                result = a.totalCPU > b.totalCPU
-            case .memory:
-                result = a.totalMemory > b.totalMemory
-            case .name:
-                result = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-            case .pid:
-                result = a.id < b.id
-            }
-            return sortAscending ? !result : result
-        }
-    }
-
-    private func updateProcessList() {
-        stableProcessList = computeProcessList()
     }
 
     private var totalChildProcessCount: Int {
-        stableProcessList.reduce(0) { $0 + $1.children.count }
+        displayedProcessList.reduce(0) { $0 + $1.children.count }
     }
 
     public var body: some View {
@@ -180,6 +99,172 @@ public struct DashboardWindowView: View {
 
             Divider()
 
+            // Resource Threshold Alert Banner (Milestone 3)
+            if !viewModel.activeAlerts.isEmpty {
+                ForEach(viewModel.activeAlerts.prefix(2)) { alert in
+                    HStack(spacing: 8) {
+                        Image(systemName: alert.severity.systemSymbolName)
+                            .foregroundStyle(alert.severity == .critical ? Color.red : Color.orange)
+                            .font(.system(size: 13, weight: .bold))
+
+                        Text("\(alert.title): \(alert.message)")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .lineLimit(1)
+
+                        Spacer()
+
+                        Button {
+                            viewModel.dismissAlert(id: alert.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                    .background(
+                        alert.severity == .critical ?
+                            Color.red.opacity(0.12) :
+                            Color.orange.opacity(0.12)
+                    )
+                }
+                Divider()
+            }
+
+            // Unified Multi-Tab Navigation Bar (Milestone 3)
+            HStack {
+                Picker("", selection: $viewModel.selectedTab) {
+                    ForEach(DashboardTab.allCases) { tab in
+                        Label(tab.rawValue, systemImage: tab.systemImage).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 440)
+
+                Spacer()
+
+                Button {
+                    viewModel.isSettingsOpen = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 11))
+                        Text("Settings")
+                            .font(.system(size: 11))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .help("Settings & Preferences")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(Color.primary.opacity(0.02))
+
+            Divider()
+
+            // Tab Content
+            Group {
+                switch viewModel.selectedTab {
+                case .processes:
+                    processesView
+                case .diagnostics:
+                    DiagnosticsView(viewModel: viewModel)
+                case .history:
+                    HistoryView(viewModel: viewModel)
+                case .systemProfile:
+                    SystemProfileView(viewModel: viewModel)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            Divider()
+
+            // Bottom Status Bar
+            HStack(spacing: 12) {
+                Text("\(displayedProcessList.count) root processes (\(totalChildProcessCount) child processes stacked)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                Text("•")
+                    .foregroundStyle(.tertiary)
+
+                Text("Apple Silicon • \(viewModel.metrics.cpu.pCoreCount)P + \(viewModel.metrics.cpu.eCoreCount)E Cores")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                Text("•")
+                    .foregroundStyle(.tertiary)
+
+                let tempStr = viewModel.metrics.thermal.socDieTemperature.map { String(format: "%.1f°C", $0) } ?? "Nominal"
+                let coolingStr = viewModel.metrics.thermal.isFanless ? "Fanless (Passive)" : "\(viewModel.metrics.thermal.fanSpeeds.count) Fans"
+                Text("Thermal: \(tempStr) (\(coolingStr))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text("Right-click a process row to quit or manage.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+
+                Text("•")
+                    .foregroundStyle(.tertiary)
+
+                AuthorBadgeView(stateMachine: viewModel.easterEggStateMachine)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        .sheet(item: $viewModel.inspectingProcess) { process in
+            ProcessInspectorView(process: process, viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.isSettingsOpen) {
+            SettingsSheetView(viewModel: viewModel)
+        }
+        .preferredColorScheme(viewModel.userSettings.themeOverride.colorScheme)
+        .frame(minWidth: 780, minHeight: 540)
+        .background(
+            WindowOcclusionObserver { isVisible in
+                viewModel.setWindowVisible(isVisible)
+            }
+        )
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { notification in
+            if let window = notification.object as? NSWindow, window.isKeyWindow || window == NSApp.keyWindow {
+                viewModel.setWindowVisible(window.occlusionState.contains(.visible))
+            }
+        }
+        .alert(
+            "New Version Available",
+            isPresented: $viewModel.showUpdateConfirmation,
+            presenting: viewModel.pendingUpdate
+        ) { update in
+            Button("Open Download Page") {
+                viewModel.confirmUpdateAndOpenBrowser()
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.showUpdateConfirmation = false
+            }
+        } message: { update in
+            Text("Version \(update.tagName) is available on GitHub. Would you like to open the release page in your default browser to download it?")
+        }
+        .onAppear {
+            viewModel.isDashboardWindowOpen = true
+            viewModel.scheduleProcessFilter()
+        }
+        .onDisappear {
+            viewModel.isDashboardWindowOpen = false
+        }
+    }
+
+    private var processesView: some View {
+        VStack(spacing: 0) {
             // Update Notification Banner (Milestone 2)
             if let update = viewModel.pendingUpdate {
                 HStack(spacing: 10) {
@@ -249,13 +334,13 @@ public struct DashboardWindowView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
 
-                    TextField("Search process, PID, user, arch...", text: $searchText)
+                    TextField("Search process, PID, user, arch...", text: $viewModel.searchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
 
-                    if !searchText.isEmpty {
+                    if !viewModel.searchText.isEmpty {
                         Button {
-                            searchText = ""
+                            viewModel.searchText = ""
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 11))
@@ -274,20 +359,19 @@ public struct DashboardWindowView: View {
                 HStack(spacing: 5) {
                     ForEach(ProcessCategory.allCases) { category in
                         Button {
-                            selectedCategory = category
-                            updateProcessList()
+                            viewModel.selectedCategory = category
                         } label: {
                             Text(category.rawValue)
-                                .font(.system(size: 11, weight: selectedCategory == category ? .semibold : .regular))
+                                .font(.system(size: 11, weight: viewModel.selectedCategory == category ? .semibold : .regular))
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
                                 .background(
-                                    selectedCategory == category ?
+                                    viewModel.selectedCategory == category ?
                                         AdaptiveColor.pCore.opacity(0.18) :
                                         Color.primary.opacity(0.05)
                                 )
                                 .foregroundStyle(
-                                    selectedCategory == category ?
+                                    viewModel.selectedCategory == category ?
                                         AdaptiveColor.pCore :
                                         .secondary
                                 )
@@ -378,6 +462,9 @@ public struct DashboardWindowView: View {
 
                 // Memory column header
                 columnHeaderButton(title: "Memory", field: .memory, width: 85, alignment: .trailing)
+
+                // Disk I/O column header (Milestone 3)
+                columnHeaderButton(title: "Disk I/O", field: .diskIO, width: 85, alignment: .trailing)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 7)
@@ -388,7 +475,7 @@ public struct DashboardWindowView: View {
             // Hierarchical Process Tree with Right-Click Context Menu
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(spacing: 1) {
-                    ForEach(stableProcessList) { process in
+                    ForEach(displayedProcessList) { process in
                         ProcessRowView(
                             process: process,
                             mode: .both,
@@ -396,109 +483,37 @@ public struct DashboardWindowView: View {
                             expandedPIDs: $expandedPIDs,
                             onAction: { message in
                                 showFeedback(message)
+                            },
+                            onInspect: { item in
+                                viewModel.inspect(process: item)
                             }
                         )
+                        .equatable()
                         .id(process.id)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
             }
-
-            Divider()
-
-            // Bottom Status Bar
-            HStack(spacing: 12) {
-                Text("\(stableProcessList.count) root processes (\(totalChildProcessCount) child processes stacked)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-
-                Text("•")
-                    .foregroundStyle(.tertiary)
-
-                Text("Apple Silicon • \(viewModel.metrics.cpu.pCoreCount)P + \(viewModel.metrics.cpu.eCoreCount)E Cores")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-
-                Text("•")
-                    .foregroundStyle(.tertiary)
-
-                let tempStr = viewModel.metrics.thermal.socDieTemperature.map { String(format: "%.1f°C", $0) } ?? "Nominal"
-                let coolingStr = viewModel.metrics.thermal.isFanless ? "Fanless (Passive)" : "\(viewModel.metrics.thermal.fanSpeeds.count) Fans"
-                Text("Thermal: \(tempStr) (\(coolingStr))")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                Text("Right-click a process row to quit or manage.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-
-                Text("•")
-                    .foregroundStyle(.tertiary)
-
-                AuthorBadgeView(stateMachine: viewModel.easterEggStateMachine)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.bar)
-        }
-        .frame(minWidth: 780, minHeight: 540)
-        .alert(
-            "New Version Available",
-            isPresented: $viewModel.showUpdateConfirmation,
-            presenting: viewModel.pendingUpdate
-        ) { update in
-            Button("Open Download Page") {
-                viewModel.confirmUpdateAndOpenBrowser()
-            }
-            Button("Cancel", role: .cancel) {
-                viewModel.showUpdateConfirmation = false
-            }
-        } message: { update in
-            Text("Version \(update.tagName) is available on GitHub. Would you like to open the release page in your default browser to download it?")
-        }
-        .onAppear {
-            viewModel.isDashboardWindowOpen = true
-            updateProcessList()
-        }
-        .onDisappear {
-            viewModel.isDashboardWindowOpen = false
-        }
-        .onChange(of: viewModel.metrics.processes) {
-            updateProcessList()
-        }
-        .onChange(of: searchText) {
-            updateProcessList()
-        }
-        .onChange(of: selectedCategory) {
-            updateProcessList()
-        }
-        .onChange(of: sortField) {
-            updateProcessList()
-        }
-        .onChange(of: sortAscending) {
-            updateProcessList()
         }
     }
 
     private func columnHeaderButton(title: String, field: ProcessSortField, width: CGFloat?, alignment: Alignment) -> some View {
         Button {
-            if sortField == field {
-                sortAscending.toggle()
+            if viewModel.sortField == field {
+                viewModel.sortAscending.toggle()
             } else {
-                sortField = field
-                sortAscending = (field == .name || field == .pid)
+                viewModel.sortField = field
+                viewModel.sortAscending = (field == .name || field == .pid)
             }
         } label: {
             HStack(spacing: 3) {
                 Text(title)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(sortField == field ? .primary : .secondary)
+                    .foregroundStyle(viewModel.sortField == field ? .primary : .secondary)
 
-                if sortField == field {
-                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+                if viewModel.sortField == field {
+                    Image(systemName: viewModel.sortAscending ? "chevron.up" : "chevron.down")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(.secondary)
                 }
@@ -570,5 +585,58 @@ public struct DashboardWindowView: View {
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Window Occlusion Observer
+
+struct WindowOcclusionObserver: NSViewRepresentable {
+    let onOcclusionChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowObservingNSView()
+        view.onOcclusionChange = onOcclusionChange
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    @MainActor
+    final class WindowObservingNSView: NSView {
+        var onOcclusionChange: (@MainActor (Bool) -> Void)?
+        private var observerToken: (any NSObjectProtocol)?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token = observerToken {
+                NotificationCenter.default.removeObserver(token)
+                observerToken = nil
+            }
+            guard let window = self.window else {
+                onOcclusionChange?(false)
+                return
+            }
+            onOcclusionChange?(window.occlusionState.contains(.visible))
+
+            observerToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main
+            ) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    guard let window = window else { return }
+                    let isVisible = window.occlusionState.contains(.visible)
+                    self?.onOcclusionChange?(isVisible)
+                }
+            }
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil, let token = observerToken {
+                NotificationCenter.default.removeObserver(token)
+                observerToken = nil
+            }
+        }
     }
 }

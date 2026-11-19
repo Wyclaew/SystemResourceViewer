@@ -36,12 +36,26 @@ public enum IOHIDBridge {
         private typealias ServiceCopyEventFn = @convention(c) (CFTypeRef, Int64, Int32, Int64) -> Unmanaged<CFTypeRef>?
         private typealias EventGetFloatValueFn = @convention(c) (CFTypeRef, UInt32) -> Double
 
+        /// Classified sensor metadata cached upon initial discovery to eliminate per-tick string query overhead.
+        public struct SensorMetadata: @unchecked Sendable {
+            public enum Kind: Sendable, Equatable {
+                case die(product: String)
+                case battery
+                case storage
+                case other
+            }
+            public let service: CFTypeRef
+            public let product: String
+            public let kind: Kind
+        }
+
         private var dylibHandle: UnsafeMutableRawPointer?
         private var client: CFTypeRef?
         private var fnClientCopyServices: ClientCopyServicesFn?
         private var fnServiceCopyProperty: ServiceCopyPropertyFn?
         private var fnServiceCopyEvent: ServiceCopyEventFn?
         private var fnEventGetFloatValue: EventGetFloatValueFn?
+        private var cachedSensors: [SensorMetadata]?
 
         public init?() {
             guard let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else {
@@ -79,29 +93,86 @@ public enum IOHIDBridge {
                 "PrimaryUsage": 5
             ]
             fnSetMatching(clientRef, matchDict as CFDictionary)
+
+            // Pre-classify and cache sensor metadata on discovery
+            _ = discoverAndCacheSensors()
         }
 
         deinit {
+            cachedSensors = nil
             client = nil
             if let handle = dylibHandle {
                 dlclose(handle)
             }
         }
 
-        /// Queries the active temperature sensors and synthesizes die average, peak, battery, and storage temperatures.
-        public func sample() -> ThermalSensorSnapshot? {
+        /// Discovers, queries Product strings once, and caches matching temperature sensors.
+        @discardableResult
+        public func discoverAndCacheSensors() -> [SensorMetadata] {
             guard let client = client,
                   let fnCopyServices = fnClientCopyServices,
-                  let fnCopyProperty = fnServiceCopyProperty,
-                  let fnCopyEvent = fnServiceCopyEvent,
+                  let fnCopyProperty = fnServiceCopyProperty else {
+                return []
+            }
+            guard let servicesUnmanaged = fnCopyServices(client) else {
+                return []
+            }
+            let services = servicesUnmanaged.takeRetainedValue() as [AnyObject]
+            var result: [SensorMetadata] = []
+            result.reserveCapacity(services.count)
+
+            for item in services {
+                let service = item as CFTypeRef
+                guard let propUnmanaged = fnCopyProperty(service, "Product" as CFString) else {
+                    continue
+                }
+                let product = propUnmanaged.takeRetainedValue() as? String ?? ""
+
+                let kind: SensorMetadata.Kind
+                if product.contains("tdie") && !product.contains("tcal") {
+                    kind = .die(product: product)
+                } else if product.contains("battery") || product.contains("gas gauge") {
+                    kind = .battery
+                } else if product.contains("NAND") || product.contains("storage") {
+                    kind = .storage
+                } else {
+                    kind = .other
+                }
+
+                if kind != .other {
+                    result.append(SensorMetadata(service: service, product: product, kind: kind))
+                }
+            }
+
+            self.cachedSensors = result
+            return result
+        }
+
+        public var cachedSensorCount: Int {
+            cachedSensors?.count ?? 0
+        }
+
+        public func refreshSensorCache() {
+            _ = discoverAndCacheSensors()
+        }
+
+        /// Queries active temperature sensors using cached metadata, reading raw float values without repeating string property lookups.
+        public func sample() -> ThermalSensorSnapshot? {
+            guard let fnCopyEvent = fnServiceCopyEvent,
                   let fnGetFloat = fnEventGetFloatValue else {
                 return nil
             }
 
-            guard let servicesUnmanaged = fnCopyServices(client) else {
-                return nil
+            let sensors = cachedSensors ?? discoverAndCacheSensors()
+            guard !sensors.isEmpty else {
+                return ThermalSensorSnapshot(
+                    socDieAverageTemperature: nil,
+                    socDiePeakTemperature: nil,
+                    batteryTemperature: nil,
+                    storageTemperature: nil,
+                    individualDieSensors: [:]
+                )
             }
-            let services = servicesUnmanaged.takeRetainedValue() as [AnyObject]
 
             var dieSensors: [String: Double] = [:]
             var batteryTemps: [Double] = []
@@ -111,14 +182,8 @@ public enum IOHIDBridge {
             let eventTypeTemp: Int64 = 15
             let field = UInt32(15 << 16)
 
-            for item in services {
-                let service = item as CFTypeRef
-                guard let propUnmanaged = fnCopyProperty(service, "Product" as CFString) else {
-                    continue
-                }
-                let product = propUnmanaged.takeRetainedValue() as? String ?? ""
-
-                guard let eventUnmanaged = fnCopyEvent(service, eventTypeTemp, 0, 0) else {
+            for sensor in sensors {
+                guard let eventUnmanaged = fnCopyEvent(sensor.service, eventTypeTemp, 0, 0) else {
                     continue
                 }
                 let event = eventUnmanaged.takeRetainedValue()
@@ -127,12 +192,15 @@ public enum IOHIDBridge {
                 // Reject uncalibrated or inactive readings
                 guard value >= 10.0 && value <= 125.0 else { continue }
 
-                if product.contains("tdie") && !product.contains("tcal") {
+                switch sensor.kind {
+                case .die(let product):
                     dieSensors[product] = value
-                } else if product.contains("battery") || product.contains("gas gauge") {
+                case .battery:
                     batteryTemps.append(value)
-                } else if product.contains("NAND") || product.contains("storage") {
+                case .storage:
                     storageTemps.append(value)
+                case .other:
+                    break
                 }
             }
 

@@ -132,14 +132,29 @@ Sources/SystemResourceViewer/
   - **High Load**: Processes consuming significant CPU (> 5%) or memory (> 200 MB).
 - **Architecture Badging**: Distinguishes native Apple Silicon (`arm64`) from translated (`Rosetta 2 x86_64`) processes.
 - **Process Metadata**: Displays thread counts and owner usernames (`proc_pidinfo` and Mach UID mapping).
-- **Safe POSIX Process Termination**: Safe `SIGTERM` termination and force-kill `SIGKILL` controls with destructive action confirmation dialogs, system process protection guards, and actionable error alerts.
+- **Per-Process Disk I/O**: Real-time read and write throughput per process calculated via Mach `proc_pid_rusage(RUSAGE_INFO_V4)` delta rates.
+- **Process Execution Control**: Pause (`SIGSTOP`) and resume (`SIGCONT`) capabilities with live "Paused" state indicator badges.
+- **Deep Process Inspector**: Comprehensive inspection sheet displaying thread breakdown, open file descriptors via `PROC_PIDLISTFDS`, Mach VM virtual/resident/compressed pages, and context switch counters.
+- **Safe POSIX Process Termination**: Safe `SIGTERM` termination and force-kill `SIGKILL` controls with destructive action confirmation dialogs, system process protection guards (`ProcessGuard` daemon blacklist protecting `kernel_task`, `launchd`, `WindowServer`, `loginwindow`, PID <= 1), and actionable error alerts.
 
-### 9. GitHub Release Update Checker
+### 9. Multi-Tab Interface & System Profile
+- **Four Dedicated Tabs**:
+  - **Processes**: High-performance sortable table with memory, CPU, disk I/O, pause/resume, and inspect controls.
+  - **Diagnostics**: Real-time hardware gauges, CPU topology, GPU utilization, and thermal sensors.
+  - **History**: Multi-timeline rolling telemetry charts (1m, 5m, 15m intervals) with min, mean, and max statistical analysis.
+  - **System Profile**: Detailed hardware inventory including Mac marketing model name, Apple Silicon chip generation, CPU P/E core topology, macOS version and build number, boot time, and system uptime.
+
+### 10. Resource Alerts & Diagnostics Export
+- **Proactive Resource Alerts**: Configurable warning thresholds for sustained high CPU utilization, elevated memory pressure, and thermal throttling conditions.
+- **Multi-Format Telemetry Export**: Export diagnostic reports in RFC 4180-compliant CSV, structured JSON snapshot, or Markdown formats.
+- **Privacy & Redaction Controls**: Configurable IP address masking, credential redaction, and username obfuscation during export and network display.
+
+### 11. GitHub Release Update Checker
 - **Automated Version Checking**: Periodically checks the GitHub Releases API for newer version tags.
 - **Semantic Versioning Comparison**: Robust parsing and comparison of major, minor, patch, and prerelease identifiers.
 - **Update Confirmation Dialog**: Prompts user with release notes and requires interactive confirmation before redirecting to the release download page.
 
-### 10. Author Easter Egg ("WycDev")
+### 12. Author Easter Egg ("WycDev")
 - **Status Bar Branding**: Displays "WycDev" branding in the status bar corner.
 - **7-Click Secret Reveal**: Clicking the author label 7 times unlocks adjacent heart (`heart.fill`) and cat (`cat.fill`) SF Symbols.
 - **Celebratory Confetti Animation**: Triggers a self-terminating 3-second celebratory confetti particle burst upon the first 7-click activation, returning to 0% idle CPU overhead upon completion.
@@ -214,7 +229,7 @@ swift build -c release -Xswiftc -strict-concurrency=complete
 ```
 
 ### 2. Run Automated Test Suite
-Execute the comprehensive automated test suite (142 unit, boundary, and stress tests):
+Execute the comprehensive automated test suite (314 unit, boundary, optimization, and security stress tests):
 ```bash
 swift test
 ```
@@ -244,7 +259,7 @@ The repository includes a fully automated GitHub Actions release workflow locate
 - **Runner**: Executes on `macos-14` (Apple Silicon M1 runner).
 - **Workflow Pipeline**:
   1. Checks out repository code.
-  2. Runs `swift test` to ensure all 142 tests pass.
+  2. Runs `swift test` to ensure all 314 tests pass.
   3. Executes `./build_app.sh` to compile the release binary and generate `Resource Monitor.dmg`.
   4. Automatically prunes previous GitHub releases and outdated git tags using the GitHub CLI (`gh`).
   5. Publishes a new GitHub release with `Resource Monitor.dmg` attached as a downloadable asset.

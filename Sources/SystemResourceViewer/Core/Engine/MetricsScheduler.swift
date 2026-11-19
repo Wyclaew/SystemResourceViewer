@@ -40,6 +40,11 @@ public actor MetricsScheduler {
         self.currentMode = mode
     }
 
+    /// Configures whether external socket latency probes to 1.1.1.1:53 are permitted.
+    public func setAllowExternalSocketProbe(_ allowed: Bool) async {
+        await networkService.setAllowExternalSocketProbe(allowed)
+    }
+
     /// Returns an asynchronous stream emitting live snapshots of SystemMetrics.
     public func metricsStream() -> AsyncStream<SystemMetrics> {
         AsyncStream { [weak self] continuation in

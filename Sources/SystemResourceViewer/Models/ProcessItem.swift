@@ -29,6 +29,11 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
     public let ownerUser: String
     public let executablePath: String?
     public let category: ProcessCategory
+    public let isSuspended: Bool
+    public let diskReadBytesPerSecond: Double
+    public let diskWriteBytesPerSecond: Double
+    public let totalDiskReadBytes: UInt64
+    public let totalDiskWriteBytes: UInt64
 
     public init(
         id: pid_t,
@@ -43,7 +48,12 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         threadCount: Int = 1,
         ownerUser: String = "root",
         executablePath: String? = nil,
-        category: ProcessCategory = .all
+        category: ProcessCategory = .all,
+        isSuspended: Bool = false,
+        diskReadBytesPerSecond: Double = 0.0,
+        diskWriteBytesPerSecond: Double = 0.0,
+        totalDiskReadBytes: UInt64 = 0,
+        totalDiskWriteBytes: UInt64 = 0
     ) {
         self.id = id
         self.ppid = ppid
@@ -58,11 +68,21 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         self.ownerUser = ownerUser
         self.executablePath = executablePath
         self.category = category
+        self.isSuspended = isSuspended
+        self.diskReadBytesPerSecond = diskReadBytesPerSecond
+        self.diskWriteBytesPerSecond = diskWriteBytesPerSecond
+        self.totalDiskReadBytes = totalDiskReadBytes
+        self.totalDiskWriteBytes = totalDiskWriteBytes
     }
 
     /// True if running under Rosetta 2 translation.
     public var isRosetta: Bool {
         architecture == "Rosetta 2"
+    }
+
+    /// True if this process is protected from termination by ProcessGuard.
+    public var isProtected: Bool {
+        ProcessGuard.isProtected(pid: id, name: name, bundleIdentifier: bundleIdentifier, path: executablePath)
     }
 
     /// True if this process has one or more nested child processes.
@@ -96,6 +116,22 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         formatBytes(totalMemory)
     }
 
+    public var diskBytesPerSecond: Double {
+        diskReadBytesPerSecond + diskWriteBytesPerSecond
+    }
+
+    public var totalDiskBytesPerSecond: Double {
+        diskBytesPerSecond + children.reduce(0.0) { $0 + $1.totalDiskBytesPerSecond }
+    }
+
+    public var formattedDiskIO: String {
+        Formatters.formatSpeed(diskBytesPerSecond)
+    }
+
+    public var formattedTotalDiskIO: String {
+        Formatters.formatSpeed(totalDiskBytesPerSecond)
+    }
+
     private func formatBytes(_ bytes: UInt64) -> String {
         let mb = Double(bytes) / (1024 * 1024)
         if mb >= 1024 {
@@ -110,6 +146,47 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
     }
 
     public static func == (lhs: ProcessItem, rhs: ProcessItem) -> Bool {
-        lhs.id == rhs.id
+        lhs.id == rhs.id &&
+        lhs.cpuPercentage == rhs.cpuPercentage &&
+        lhs.memoryBytes == rhs.memoryBytes &&
+        lhs.architecture == rhs.architecture &&
+        lhs.category == rhs.category &&
+        lhs.isSuspended == rhs.isSuspended &&
+        lhs.children == rhs.children
+    }
+
+    // MARK: - Thread-Safe Path-Based Icon Cache
+
+    /// Thread-safe icon cache keyed by persistent executable path to avoid redundant AppKit icon queries.
+    public final class IconCache: @unchecked Sendable {
+        public static let shared = IconCache()
+        private var storage: [String: NSImage] = [:]
+        private let lock = NSLock()
+
+        public init() {}
+
+        public func icon(forPath path: String) -> NSImage? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage[path]
+        }
+
+        public func setIcon(_ icon: NSImage, forPath path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            storage[path] = icon
+        }
+
+        public func clear() {
+            lock.lock()
+            defer { lock.unlock() }
+            storage.removeAll()
+        }
+
+        public var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage.count
+        }
     }
 }

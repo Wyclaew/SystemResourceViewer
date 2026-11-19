@@ -56,4 +56,32 @@ public enum Formatters {
         guard let watts else { return "—" }
         return String(format: "%.1f W", watts)
     }
+
+    /// Formats an uptime duration in seconds to human-readable format.
+    public static func formatUptime(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(max(0, seconds))
+        let days = totalSeconds / 86400
+        let hours = (totalSeconds % 86400) / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        if days > 0 {
+            return "\(days)d \(hours)h \(minutes)m"
+        } else if hours > 0 {
+            return "\(hours)h \(minutes)m \(secs)s"
+        } else if minutes > 0 {
+            return "\(minutes)m \(secs)s"
+        } else {
+            return "\(secs)s"
+        }
+    }
+
+    /// Formats nanoseconds into milliseconds or seconds.
+    public static func formatNanoseconds(_ ns: UInt64) -> String {
+        let ms = Double(ns) / 1_000_000.0
+        if ms >= 1000.0 {
+            return String(format: "%.2f s", ms / 1000.0)
+        } else {
+            return String(format: "%.1f ms", ms)
+        }
+    }
 }
