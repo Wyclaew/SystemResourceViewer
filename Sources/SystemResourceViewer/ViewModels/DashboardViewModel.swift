@@ -407,6 +407,22 @@ public final class DashboardViewModel: ObservableObject {
         return "CPU \(cpu)%  GPU \(gpu)%  RAM \(mem)%  ↓ \(rx)"
     }
 
+    /// Clears any active process search text and resets the category filter to .all.
+    public func clearFilters() {
+        searchText = ""
+        selectedCategory = .all
+    }
+
+    /// Running application release version string (e.g. "1.1.0").
+    public var appVersion: String {
+        if let bundleId = Bundle.main.bundleIdentifier,
+           (bundleId.contains("ResourceMonitor") || bundleId.contains("SystemResourceViewer")),
+           let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            return version
+        }
+        return "1.1.0"
+    }
+
     // MARK: - Update Checker
 
     public func checkForUpdates(currentVersion: String? = nil) async {
@@ -414,7 +430,7 @@ public final class DashboardViewModel: ObservableObject {
         isCheckingForUpdates = true
         defer { isCheckingForUpdates = false }
 
-        let version = currentVersion ?? (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0.0"
+        let version = currentVersion ?? appVersion
         let update = await updateCheckerService.checkForUpdates(currentVersion: version)
         self.pendingUpdate = update
         if update != nil {

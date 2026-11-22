@@ -39,12 +39,13 @@ public enum IOKitBridge {
         while service != 0 {
             if let statsCF = IORegistryEntryCreateCFProperty(service, "Statistics" as CFString, kCFAllocatorDefault, 0),
                let stats = statsCF.takeRetainedValue() as? [String: Any] {
-                if let read = stats["Bytes (Read)"] as? Int64, read >= 0 {
-                    totalRead += UInt64(read)
+                let parsed = parseDiskIOStats(from: stats)
+                if let read = parsed.read {
+                    totalRead += read
                     foundAny = true
                 }
-                if let write = stats["Bytes (Write)"] as? Int64, write >= 0 {
-                    totalWrite += UInt64(write)
+                if let write = parsed.write {
+                    totalWrite += write
                     foundAny = true
                 }
             }
@@ -53,6 +54,14 @@ public enum IOKitBridge {
         }
 
         return foundAny ? DiskIOBytes(readBytes: totalRead, writeBytes: totalWrite) : nil
+    }
+
+    /// Safely parses cumulative read and write bytes from an IOBlockStorageDriver Statistics dictionary,
+    /// resilient against __NSCFNumber and Int64 bridging variations.
+    public static func parseDiskIOStats(from stats: [String: Any]) -> (read: UInt64?, write: UInt64?) {
+        let read = (stats["Bytes (Read)"] as? NSNumber)?.uint64Value ?? (stats["Bytes (Read)"] as? Int64).map { UInt64(max(0, $0)) }
+        let write = (stats["Bytes (Write)"] as? NSNumber)?.uint64Value ?? (stats["Bytes (Write)"] as? Int64).map { UInt64(max(0, $0)) }
+        return (read, write)
     }
 
     // MARK: - Power & Battery Telemetry
@@ -114,25 +123,10 @@ public enum IOKitBridge {
                 var props: Unmanaged<CFMutableDictionary>?
                 if IORegistryEntryCreateCFProperties(service, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
                    let dict = props?.takeRetainedValue() as? [String: Any] {
-                    cycleCount = dict["CycleCount"] as? Int
-
-                    let maxCapacity = dict["MaxCapacity"] as? Double
-                    let designCapacity = dict["DesignCapacity"] as? Double
-
-                    if let maxCap = maxCapacity, let designCap = designCapacity, designCap > 0 {
-                        healthPercentage = min(100.0, Swift.max(0.0, (maxCap / designCap) * 100.0))
-                    } else if let maxCap = maxCapacity {
-                        healthPercentage = min(100.0, maxCap)
-                    }
-
-                    // Power calculation in Watts:
-                    // InstantAmperage in mA, Voltage in mV -> (mA * mV) / 1,000,000 = Watts
-                    let amperage = (dict["InstantAmperage"] as? Double) ?? (dict["Amperage"] as? Double)
-                    let voltage = dict["Voltage"] as? Double
-                    if let amp = amperage, let volt = voltage, volt > 0 {
-                        let watts = abs(amp * volt) / 1_000_000.0
-                        powerDrawWatts = Double(round(watts * 10.0) / 10.0)
-                    }
+                    let parsed = parseBatteryProperties(from: dict)
+                    cycleCount = parsed.cycleCount
+                    healthPercentage = parsed.healthPercentage
+                    powerDrawWatts = parsed.powerDrawWatts
                 }
                 IOObjectRelease(service)
             }
@@ -150,6 +144,34 @@ public enum IOKitBridge {
             powerDrawWatts: powerDrawWatts,
             timeRemainingMinutes: timeRemaining
         )
+    }
+
+    /// Safely parses cycle count, health percentage, and power draw in Watts from an AppleSmartBattery dictionary,
+    /// resilient against __NSCFNumber and Double bridging variations.
+    public static func parseBatteryProperties(from dict: [String: Any]) -> (cycleCount: Int?, healthPercentage: Double?, powerDrawWatts: Double?) {
+        let cycleCount = (dict["CycleCount"] as? NSNumber)?.intValue ?? (dict["CycleCount"] as? Int)
+
+        var healthPercentage: Double?
+        let maxCapacity = (dict["MaxCapacity"] as? NSNumber)?.doubleValue ?? (dict["MaxCapacity"] as? Double)
+        let designCapacity = (dict["DesignCapacity"] as? NSNumber)?.doubleValue ?? (dict["DesignCapacity"] as? Double)
+
+        if let maxCap = maxCapacity, let designCap = designCapacity, designCap > 0 {
+            healthPercentage = min(100.0, Swift.max(0.0, (maxCap / designCap) * 100.0))
+        } else if let maxCap = maxCapacity {
+            healthPercentage = min(100.0, maxCap)
+        }
+
+        var powerDrawWatts: Double?
+        // Power calculation in Watts:
+        // InstantAmperage in mA, Voltage in mV -> (mA * mV) / 1,000,000 = Watts
+        let amperage = (dict["InstantAmperage"] as? NSNumber)?.doubleValue ?? (dict["Amperage"] as? NSNumber)?.doubleValue ?? (dict["InstantAmperage"] as? Double) ?? (dict["Amperage"] as? Double)
+        let voltage = (dict["Voltage"] as? NSNumber)?.doubleValue ?? (dict["Voltage"] as? Double)
+        if let amp = amperage, let volt = voltage, volt > 0 {
+            let watts = abs(amp * volt) / 1_000_000.0
+            powerDrawWatts = Double(round(watts * 10.0) / 10.0)
+        }
+
+        return (cycleCount, healthPercentage, powerDrawWatts)
     }
 
     // MARK: - GPU Hardware & Utilization Telemetry

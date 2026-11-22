@@ -149,6 +149,8 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         lhs.id == rhs.id &&
         lhs.cpuPercentage == rhs.cpuPercentage &&
         lhs.memoryBytes == rhs.memoryBytes &&
+        lhs.diskReadBytesPerSecond == rhs.diskReadBytesPerSecond &&
+        lhs.diskWriteBytesPerSecond == rhs.diskWriteBytesPerSecond &&
         lhs.architecture == rhs.architecture &&
         lhs.category == rhs.category &&
         lhs.isSuspended == rhs.isSuspended &&
@@ -162,8 +164,11 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         public static let shared = IconCache()
         private var storage: [String: NSImage] = [:]
         private let lock = NSLock()
+        public let maxCapacity: Int
 
-        public init() {}
+        public init(maxCapacity: Int = 500) {
+            self.maxCapacity = maxCapacity
+        }
 
         public func icon(forPath path: String) -> NSImage? {
             lock.lock()
@@ -174,6 +179,9 @@ public struct ProcessItem: Identifiable, Sendable, Hashable {
         public func setIcon(_ icon: NSImage, forPath path: String) {
             lock.lock()
             defer { lock.unlock() }
+            if storage.count >= maxCapacity {
+                storage.removeAll()
+            }
             storage[path] = icon
         }
 

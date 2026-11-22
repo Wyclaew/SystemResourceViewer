@@ -68,5 +68,8 @@ public struct MetricRingGauge: View {
             }
         }
         .frame(width: size, height: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title.map { "\($0) gauge" } ?? "Metric gauge")
+        .accessibilityValue("\(displayPercentage) percent")
     }
 }

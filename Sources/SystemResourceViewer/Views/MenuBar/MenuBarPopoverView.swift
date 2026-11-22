@@ -179,5 +179,6 @@ public struct MenuBarPopoverView: View {
         .onDisappear {
             viewModel.isPopoverOpen = false
         }
+        .preferredColorScheme(viewModel.userSettings.themeOverride.colorScheme)
     }
 }

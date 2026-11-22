@@ -50,7 +50,12 @@ public actor DiskAndPowerService {
         if let currentIO = IOKitBridge.fetchCumulativeDiskIOBytes() {
             if let prev = previousDiskSample {
                 let dt = now.timeIntervalSince(prev.time)
-                if dt > 0.05 {
+                if dt > 10.0 {
+                    // System woke from sleep or clock jumped: reset baseline
+                    previousDiskSample = (read: currentIO.readBytes, write: currentIO.writeBytes, time: now)
+                    readSpeed = 0.0
+                    writeSpeed = 0.0
+                } else if dt > 0.05 {
                     let dRead = currentIO.readBytes >= prev.read ? currentIO.readBytes - prev.read : 0
                     let dWrite = currentIO.writeBytes >= prev.write ? currentIO.writeBytes - prev.write : 0
                     readSpeed = Double(dRead) / dt

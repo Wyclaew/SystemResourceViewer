@@ -229,7 +229,7 @@ swift build -c release -Xswiftc -strict-concurrency=complete
 ```
 
 ### 2. Run Automated Test Suite
-Execute the comprehensive automated test suite (314 unit, boundary, optimization, and security stress tests):
+Execute the comprehensive automated test suite (328 unit, boundary, optimization, and security stress tests):
 ```bash
 swift test
 ```
@@ -259,10 +259,9 @@ The repository includes a fully automated GitHub Actions release workflow locate
 - **Runner**: Executes on `macos-latest` (Apple Silicon runner).
 - **Workflow Pipeline**:
   1. Checks out repository code.
-  2. Runs `swift test` to ensure all 314 tests pass.
+  2. Runs `swift test` to ensure all 328 tests pass under Swift 6 strict concurrency.
   3. Executes `./build_app.sh` to compile the release binary and generate `Resource Monitor.dmg`.
-  4. Automatically prunes previous GitHub releases and outdated git tags using the GitHub CLI (`gh`).
-  5. Publishes a new GitHub release with `Resource Monitor.dmg` attached as a downloadable asset.
+  4. Publishes a new GitHub release with `Resource Monitor.dmg` attached as a downloadable asset.
 
 ---
 

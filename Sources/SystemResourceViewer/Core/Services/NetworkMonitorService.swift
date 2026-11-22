@@ -67,7 +67,12 @@ public actor NetworkMonitorService {
 
         if let prev = previousSample {
             let dt = now.timeIntervalSince(prev.time)
-            if dt > 0.05 {
+            if dt > 10.0 {
+                // System woke from sleep or clock jumped: reset baseline
+                previousSample = (inBytes: currentIn, outBytes: currentOut, time: now)
+                rxSpeed = 0.0
+                txSpeed = 0.0
+            } else if dt > 0.05 {
                 let dIn = currentIn >= prev.inBytes ? currentIn - prev.inBytes : 0
                 let dOut = currentOut >= prev.outBytes ? currentOut - prev.outBytes : 0
                 rxSpeed = Double(dIn) / dt

@@ -14,11 +14,11 @@ public actor UpdateCheckerService: Sendable {
     ///
     /// - Parameters:
     ///   - currentVersion: The current running application version (e.g. "1.0.0").
-    ///   - repo: The GitHub repository identifier in "owner/repo" format. Default is "WycDev/SystemResourceViewer".
+    ///   - repo: The GitHub repository identifier in "owner/repo" format. Default is "Wyclaew/SystemResourceViewer".
     /// - Returns: A `GitHubRelease` instance if a newer version is available, or `nil` if up-to-date or if any error occurs.
     public func checkForUpdates(
         currentVersion: String,
-        repo: String = "WycDev/SystemResourceViewer"
+        repo: String = "Wyclaew/SystemResourceViewer"
     ) async -> GitHubRelease? {
         guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest") else {
             return nil

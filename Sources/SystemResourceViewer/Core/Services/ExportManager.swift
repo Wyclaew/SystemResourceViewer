@@ -107,6 +107,15 @@ public enum ExportManager {
                 "p_core_average_percent": metrics.cpu.pCoreAverageUsage,
                 "e_core_average_percent": metrics.cpu.eCoreAverageUsage
             ],
+            "gpu": [
+                "model_name": metrics.gpu.modelName,
+                "device_utilization_percent": metrics.gpu.deviceUtilization,
+                "renderer_utilization_percent": metrics.gpu.rendererUtilization,
+                "tiler_utilization_percent": metrics.gpu.tilerUtilization,
+                "allocated_vram_bytes": metrics.gpu.allocatedVRAMBytes,
+                "in_use_vram_bytes": metrics.gpu.inUseVRAMBytes,
+                "has_unified_memory": metrics.gpu.hasUnifiedMemory
+            ],
             "memory": [
                 "total_bytes": metrics.memory.totalBytes,
                 "used_bytes": metrics.memory.usedBytes,
@@ -176,6 +185,7 @@ public enum ExportManager {
         | Subsystem | Metric | Value |
         | :--- | :--- | :--- |
         | **CPU** | Total Load | \(String(format: "%.1f%%", metrics.cpu.totalUsage)) |
+        | **GPU** | Model / Load | \(metrics.gpu.modelName) (\(String(format: "%.1f%%", metrics.gpu.deviceUtilization))) |
         | **Memory** | Usage | \(String(format: "%.1f%%", metrics.memory.usedPercentage)) (\(Formatters.formatBytes(metrics.memory.usedBytes)) / \(Formatters.formatBytes(metrics.memory.totalBytes))) |
         | **Memory** | Pressure | \(metrics.memory.pressureLevel.rawValue) |
         | **Thermals** | State | \(metrics.thermal.thermalStateDescription) |

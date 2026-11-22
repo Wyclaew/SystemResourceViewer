@@ -122,6 +122,7 @@ final class ExportManagerTests: XCTestCase {
         let jsonObject = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any]
         XCTAssertNotNil(jsonObject)
         XCTAssertNotNil(jsonObject?["cpu"])
+        XCTAssertNotNil(jsonObject?["gpu"])
         XCTAssertNotNil(jsonObject?["memory"])
         XCTAssertNotNil(jsonObject?["processes"])
 
@@ -146,6 +147,7 @@ final class ExportManagerTests: XCTestCase {
 
         XCTAssertTrue(md.contains("# System Resource Viewer — Diagnostics Report"))
         XCTAssertTrue(md.contains("## Subsystem Telemetry"))
+        XCTAssertTrue(md.contains("**GPU**"))
         XCTAssertTrue(md.contains("## Top CPU Processes"))
         XCTAssertTrue(md.contains("Safari"))
     }

@@ -163,8 +163,11 @@ struct InteractiveHistoryChart: View {
                 Spacer()
 
                 if let idx = hoveredIndex, idx >= 0, idx < values.count {
-                    let offsetSeconds = (values.count - 1 - idx) * (range == .fifteenMinutes ? 1 : 1)
-                    Text("T - \(offsetSeconds)s: \(formatValue(values[idx]))")
+                    let offsetSeconds = values.count - 1 - idx
+                    let formattedOffset: String = offsetSeconds >= 60
+                        ? "\(offsetSeconds / 60)m \(offsetSeconds % 60)s"
+                        : "\(offsetSeconds)s"
+                    Text("T - \(formattedOffset): \(formatValue(values[idx]))")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(color)
                 } else {

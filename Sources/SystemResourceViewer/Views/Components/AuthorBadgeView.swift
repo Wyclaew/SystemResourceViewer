@@ -41,6 +41,9 @@ public struct AuthorBadgeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(stateMachine.state.isUnlocked ? "Author badge: WycDev. Easter egg companion icons unlocked." : "Author badge: WycDev")
+        .accessibilityHint("Developer attribution badge. Click to interact.")
         .help(stateMachine.state.isUnlocked ? "PulseCore by WycDev (Unlocked ❤️🐱)" : "PulseCore by WycDev")
         .overlay {
             if stateMachine.state.showConfetti {

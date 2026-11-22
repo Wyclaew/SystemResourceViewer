@@ -16,6 +16,7 @@ public struct DashboardWindowView: View {
     @State private var statusFeedback: String?
     @State private var statusFeedbackTimer: Task<Void, Never>?
     @State private var expandedPIDs: Set<pid_t> = []
+    @FocusState private var isSearchFocused: Bool
 
     public init(viewModel: DashboardViewModel) {
         self.viewModel = viewModel
@@ -121,6 +122,7 @@ public struct DashboardWindowView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss \(alert.title) alert")
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 6)
@@ -160,7 +162,8 @@ public struct DashboardWindowView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .help("Settings & Preferences")
+                .keyboardShortcut(",", modifiers: .command)
+                .help("Settings & Preferences (⌘,)")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
@@ -235,6 +238,28 @@ public struct DashboardWindowView: View {
                 viewModel.setWindowVisible(isVisible)
             }
         )
+        .background {
+            // Standard macOS keyboard shortcuts: Cmd-1..4 for tabs, Cmd-F for process search
+            Group {
+                Button("") { viewModel.selectedTab = .processes }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("") { viewModel.selectedTab = .diagnostics }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button("") { viewModel.selectedTab = .history }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button("") { viewModel.selectedTab = .systemProfile }
+                    .keyboardShortcut("4", modifiers: .command)
+                Button("") {
+                    if viewModel.selectedTab != .processes {
+                        viewModel.selectedTab = .processes
+                    }
+                    isSearchFocused = true
+                }
+                .keyboardShortcut("f", modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { notification in
             if let window = notification.object as? NSWindow, window.isKeyWindow || window == NSApp.keyWindow {
                 viewModel.setWindowVisible(window.occlusionState.contains(.visible))
@@ -337,6 +362,8 @@ public struct DashboardWindowView: View {
                     TextField("Search process, PID, user, arch...", text: $viewModel.searchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
+                        .focused($isSearchFocused)
+                        .accessibilityLabel("Process search field")
 
                     if !viewModel.searchText.isEmpty {
                         Button {
@@ -347,6 +374,7 @@ public struct DashboardWindowView: View {
                                 .foregroundStyle(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Clear search text")
                     }
                 }
                 .padding(.horizontal, 10)
@@ -378,6 +406,8 @@ public struct DashboardWindowView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityAddTraits(viewModel.selectedCategory == category ? [.isButton, .isSelected] : [.isButton])
+                        .accessibilityLabel("\(category.rawValue) process category filter")
                     }
                 }
 
@@ -458,13 +488,13 @@ public struct DashboardWindowView: View {
                 Spacer()
 
                 // CPU column header
-                columnHeaderButton(title: "CPU %", field: .cpu, width: 75, alignment: .trailing)
+                columnHeaderButton(title: "CPU %", field: .cpu, width: 70, alignment: .trailing)
 
                 // Memory column header
-                columnHeaderButton(title: "Memory", field: .memory, width: 85, alignment: .trailing)
+                columnHeaderButton(title: "Memory", field: .memory, width: 80, alignment: .trailing)
 
                 // Disk I/O column header (Milestone 3)
-                columnHeaderButton(title: "Disk I/O", field: .diskIO, width: 85, alignment: .trailing)
+                columnHeaderButton(title: "Disk I/O", field: .diskIO, width: 80, alignment: .trailing)
             }
             .padding(.horizontal, 22)
             .padding(.vertical, 7)
@@ -472,28 +502,51 @@ public struct DashboardWindowView: View {
 
             Divider().opacity(0.5)
 
-            // Hierarchical Process Tree with Right-Click Context Menu
-            ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(spacing: 1) {
-                    ForEach(displayedProcessList) { process in
-                        ProcessRowView(
-                            process: process,
-                            mode: .both,
-                            isChild: false,
-                            expandedPIDs: $expandedPIDs,
-                            onAction: { message in
-                                showFeedback(message)
-                            },
-                            onInspect: { item in
-                                viewModel.inspect(process: item)
-                            }
-                        )
-                        .equatable()
-                        .id(process.id)
+            // Hierarchical Process Tree with Right-Click Context Menu or Empty State
+            if displayedProcessList.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: viewModel.searchText.isEmpty ? "cpu" : "magnifyingglass")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text(viewModel.searchText.isEmpty ? "No Processes Available" : "No Matching Processes")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    if !viewModel.searchText.isEmpty || viewModel.selectedCategory != .all {
+                        Text("No process matched \"\(viewModel.searchText)\" in category \(viewModel.selectedCategory.rawValue).")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                        Button("Clear Filter & Search") {
+                            viewModel.clearFilters()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(32)
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    LazyVStack(spacing: 1) {
+                        ForEach(displayedProcessList) { process in
+                            ProcessRowView(
+                                process: process,
+                                mode: .both,
+                                isChild: false,
+                                expandedPIDs: $expandedPIDs,
+                                onAction: { message in
+                                    showFeedback(message)
+                                },
+                                onInspect: { item in
+                                    viewModel.inspect(process: item)
+                                }
+                            )
+                            .equatable()
+                            .id(process.id)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 6)
+                }
             }
         }
     }
@@ -521,6 +574,9 @@ public struct DashboardWindowView: View {
             .frame(width: width, alignment: alignment)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Sort by \(title)")
+        .accessibilityValue(viewModel.sortField == field ? (viewModel.sortAscending ? "Sorted ascending" : "Sorted descending") : "Not sorted")
+        .accessibilityHint("Click to sort table by \(title)")
     }
 
     private func showFeedback(_ message: String) {
@@ -584,6 +640,10 @@ public struct DashboardWindowView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.08), lineWidth: 1)
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title) Overview")
+        .accessibilityValue("\(mainValue), \(subValue)")
+        .accessibilityHint("System telemetry summary card")
         .frame(maxWidth: .infinity)
     }
 }

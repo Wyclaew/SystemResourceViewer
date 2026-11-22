@@ -12,6 +12,9 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 DMG_STAGE=".tmp/dmg_stage"
 
+VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Info.plist 2>/dev/null || echo "1.1.0")
+echo "=== Packaging Resource Monitor v${VERSION} ==="
+
 echo "=== 1. Checking Application Icon ==="
 if [ ! -f "AppIcon.icns" ]; then
     echo "Generating AppIcon.icns..."
@@ -34,6 +37,7 @@ rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 
 cp ".build/release/SystemResourceViewer" "${MACOS_DIR}/SystemResourceViewer"
+chmod +x "${MACOS_DIR}/SystemResourceViewer"
 cp "Info.plist" "${CONTENTS_DIR}/Info.plist"
 cp "AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 
@@ -42,6 +46,9 @@ codesign --force --deep \
     --options runtime \
     --entitlements "SystemResourceViewer.entitlements" \
     --sign - "${BUNDLE_DIR}"
+
+echo "Verifying bundle code signature..."
+codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 
 # Maintain legacy alias for backwards compatibility
 rm -rf "System Resource Viewer.app"
@@ -82,7 +89,7 @@ if [ ! -L "${MOUNT_DIR}/Applications" ]; then
     exit 1
 fi
 
-hdiutil detach "${MOUNT_DIR}" -quiet
+hdiutil detach "${MOUNT_DIR}" -force -quiet || true
 rm -rf "${MOUNT_DIR}"
 
 echo "=================================================="

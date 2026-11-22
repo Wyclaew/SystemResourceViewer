@@ -112,6 +112,12 @@ public struct ProcessInspectorView: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+
+                Button("Dismiss", role: .cancel) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
             }
             .padding(16)
             .background(Color(NSColor.windowBackgroundColor))
@@ -229,6 +235,7 @@ public struct ProcessInspectorView: View {
                         Text(copyFeedback ? "Copied!" : "Copy Diagnostics")
                     }
                 }
+                .keyboardShortcut("c", modifiers: .command)
 
                 if detail.executablePath != nil {
                     Button {
@@ -319,13 +326,24 @@ public struct ProcessInspectorView: View {
         }
     }
 
+    private func currentProcessItem() -> ProcessItem {
+        for root in viewModel.metrics.processes {
+            if root.id == initialProcess.id { return root }
+            for child in root.children where child.id == initialProcess.id {
+                return child
+            }
+        }
+        return initialProcess
+    }
+
     private func startPolling() {
         refreshTimer?.cancel()
         refreshTimer = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 guard !Task.isCancelled else { break }
-                let updated = DarwinMachBridge.fetchProcessDetail(for: initialProcess)
+                let current = await MainActor.run { currentProcessItem() }
+                let updated = DarwinMachBridge.fetchProcessDetail(for: current)
                 await MainActor.run {
                     self.detail = updated
                 }
@@ -337,13 +355,13 @@ public struct ProcessInspectorView: View {
         let res = ProcessAction.pause(pid: detail.id, name: detail.name)
         handleActionResult(res, action: "Paused")
         // Refresh immediately
-        self.detail = DarwinMachBridge.fetchProcessDetail(for: initialProcess)
+        self.detail = DarwinMachBridge.fetchProcessDetail(for: currentProcessItem())
     }
 
     private func resumeProcess() {
         let res = ProcessAction.resume(pid: detail.id, name: detail.name)
         handleActionResult(res, action: "Resumed")
-        self.detail = DarwinMachBridge.fetchProcessDetail(for: initialProcess)
+        self.detail = DarwinMachBridge.fetchProcessDetail(for: currentProcessItem())
     }
 
     private func handleActionResult(_ res: ProcessActionResult, action: String) {

@@ -26,6 +26,12 @@ public struct SettingsSheetView: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+
+                Button("Dismiss", role: .cancel) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
             }
             .padding(16)
             .background(Color(NSColor.windowBackgroundColor))
@@ -103,6 +109,8 @@ public struct SettingsSheetView: View {
                                         .font(.system(size: 11, design: .monospaced))
                                         .frame(width: 140, alignment: .leading)
                                     Slider(value: $viewModel.userSettings.cpuAlertThreshold, in: 50...99, step: 1)
+                                        .accessibilityLabel("CPU alert threshold percentage")
+                                        .accessibilityValue("\(Int(viewModel.userSettings.cpuAlertThreshold)) percent")
                                 }
                             }
 
@@ -122,6 +130,8 @@ public struct SettingsSheetView: View {
                                         .font(.system(size: 11, design: .monospaced))
                                         .frame(width: 160, alignment: .leading)
                                     Slider(value: $viewModel.userSettings.thermalAlertThreshold, in: 60...105, step: 1)
+                                        .accessibilityLabel("Thermal alert temperature threshold")
+                                        .accessibilityValue("\(Int(viewModel.userSettings.thermalAlertThreshold)) degrees Celsius")
                                 }
                             }
                         }
@@ -209,6 +219,15 @@ public struct SettingsSheetView: View {
                         }
                         .foregroundStyle(.red)
                     }
+
+                    HStack {
+                        Spacer()
+                        Text("Resource Monitor v\(viewModel.appVersion)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                    }
+                    .padding(.top, 8)
                 }
                 .padding(16)
             }

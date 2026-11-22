@@ -290,10 +290,26 @@ public enum DarwinMachBridge {
                 byteCapacity = procCount * stride
             }
 
-            guard let buffer else { return [] }
+            guard var currentBuffer = buffer else { return [] }
             var bufferSize = byteCapacity
-            guard sysctl(&mib, 4, buffer, &bufferSize, nil, 0) == 0 else {
-                return []
+            if sysctl(&mib, 4, currentBuffer, &bufferSize, nil, 0) != 0 {
+                if errno == ENOMEM {
+                    // One-time retry with doubled headroom if processes spawned rapidly
+                    let retryCapacity = max(byteCapacity * 2, neededBytes * 2)
+                    let stride = MemoryLayout<kinfo_proc>.stride
+                    let procCount = (retryCapacity + stride - 1) / stride
+                    buffer?.deallocate()
+                    let newBuffer = UnsafeMutablePointer<kinfo_proc>.allocate(capacity: procCount)
+                    self.buffer = newBuffer
+                    self.byteCapacity = procCount * stride
+                    bufferSize = self.byteCapacity
+                    guard sysctl(&mib, 4, newBuffer, &bufferSize, nil, 0) == 0 else {
+                        return []
+                    }
+                    currentBuffer = newBuffer
+                } else {
+                    return []
+                }
             }
 
             let actualCount = min(byteCapacity / MemoryLayout<kinfo_proc>.stride, bufferSize / MemoryLayout<kinfo_proc>.stride)
@@ -301,7 +317,7 @@ public enum DarwinMachBridge {
             result.reserveCapacity(actualCount)
 
             for i in 0..<actualCount {
-                let p = buffer.advanced(by: i).pointee
+                let p = currentBuffer.advanced(by: i).pointee
                 let pid = p.kp_proc.p_pid
                 guard pid > 0 else { continue }
                 let ppid = p.kp_eproc.e_ppid
@@ -419,18 +435,24 @@ public enum DarwinMachBridge {
         return nil
     }
 
-    /// Checks if a process is running under Rosetta 2 translation via sysctl.
-    public static func isRosettaTranslated(pid: pid_t) -> Bool {
-        guard pid > 0 else { return false }
-        var ret: Int32 = 0
-        var size = MemoryLayout<Int32>.size
+    /// Static cache for sysctl.proc_translated MIB to eliminate redundant kernel string lookups.
+    private static let procTranslatedMIB: [Int32]? = {
         var mib: [Int32] = [0, 0]
         var mibSize = 2
         if sysctlnametomib("sysctl.proc_translated", &mib, &mibSize) == 0 {
-            var pidMib = [mib[0], mib[1], pid]
-            if sysctl(&pidMib, 3, &ret, &size, nil, 0) == 0 {
-                return ret == 1
-            }
+            return mib
+        }
+        return nil
+    }()
+
+    /// Checks if a process is running under Rosetta 2 translation via sysctl.
+    public static func isRosettaTranslated(pid: pid_t) -> Bool {
+        guard pid > 0, let mib = procTranslatedMIB else { return false }
+        var ret: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        var pidMib = [mib[0], mib[1], pid]
+        if sysctl(&pidMib, 3, &ret, &size, nil, 0) == 0 {
+            return ret == 1
         }
         return false
     }
@@ -499,7 +521,7 @@ public enum DarwinMachBridge {
         if size == MemoryLayout<proc_bsdinfo>.size {
             let sec = Double(bsdInfo.pbi_start_tvsec)
             let usec = Double(bsdInfo.pbi_start_tvusec)
-            let date = Date(timeIntervalSince1970: sec + (usec / 1_000_000.0))
+            let date = sec > 0 ? Date(timeIntervalSince1970: sec + (usec / 1_000_000.0)) : nil
             let isSuspended = (bsdInfo.pbi_status == UInt32(SSTOP))
             return (date, isSuspended, pid_t(bsdInfo.pbi_ppid))
         }
@@ -511,7 +533,7 @@ public enum DarwinMachBridge {
         if sysctl(&mib, 4, &kp, &kpSize, nil, 0) == 0 {
             let sec = Double(kp.kp_proc.p_starttime.tv_sec)
             let usec = Double(kp.kp_proc.p_starttime.tv_usec)
-            let date = Date(timeIntervalSince1970: sec + (usec / 1_000_000.0))
+            let date = sec > 0 ? Date(timeIntervalSince1970: sec + (usec / 1_000_000.0)) : nil
             let isSuspended = (Int32(kp.kp_proc.p_stat) == SSTOP)
             return (date, isSuspended, kp.kp_eproc.e_ppid)
         }
@@ -625,15 +647,51 @@ public enum DarwinMachBridge {
 
     public static func resolveMacMarketingName(for model: String) -> String {
         let knownModels: [String: String] = [
+            // M5
             "Mac17,3": "MacBook Pro (14-inch, M5)",
+            // M4
             "Mac16,1": "MacBook Pro (14-inch, M4)",
             "Mac16,2": "MacBook Pro (14-inch, M4 Pro)",
+            "Mac16,3": "iMac (24-inch, M4, 2024)",
+            "Mac16,5": "MacBook Pro (16-inch, M4 Pro, 2024)",
+            "Mac16,6": "MacBook Pro (16-inch, M4 Max, 2024)",
+            "Mac16,7": "MacBook Pro (14-inch, M4 Pro, 2024)",
+            "Mac16,8": "MacBook Pro (14-inch, M4 Max, 2024)",
+            "Mac16,10": "Mac mini (M4, 2024)",
+            "Mac16,11": "Mac mini (M4 Pro, 2024)",
+            // M3
             "Mac15,3": "MacBook Pro (14-inch, Nov 2023)",
+            "Mac15,4": "iMac (24-inch, 2 Ports, M3, 2023)",
+            "Mac15,5": "iMac (24-inch, 4 Ports, M3, 2023)",
+            "Mac15,6": "MacBook Pro (14-inch, M3 Pro, Nov 2023)",
+            "Mac15,7": "MacBook Pro (16-inch, M3 Pro, Nov 2023)",
+            "Mac15,8": "MacBook Pro (16-inch, M3 Max, Nov 2023)",
+            "Mac15,12": "MacBook Air (13-inch, M3, 2024)",
+            "Mac15,13": "MacBook Air (15-inch, M3, 2024)",
+            // M2
             "Mac14,2": "MacBook Air (M2, 2022)",
+            "Mac14,3": "Mac mini (M2, 2023)",
+            "Mac14,6": "MacBook Pro (16-inch, M2 Max, 2023)",
             "Mac14,7": "MacBook Pro (13-inch, M2, 2022)",
+            "Mac14,8": "Mac Pro (2023)",
+            "Mac14,9": "MacBook Pro (14-inch, M2 Pro, 2023)",
+            "Mac14,10": "MacBook Pro (16-inch, M2 Pro, 2023)",
+            "Mac14,12": "Mac mini (M2 Pro, 2023)",
+            "Mac14,13": "Mac Studio (M2 Max, 2023)",
+            "Mac14,14": "Mac Studio (M2 Ultra, 2023)",
+            "Mac14,15": "MacBook Air (15-inch, M2, 2023)",
+            // M1
+            "Mac13,1": "Mac Studio (M1 Max, 2022)",
+            "Mac13,2": "Mac Studio (M1 Ultra, 2022)",
             "Macmini9,1": "Mac mini (M1, 2020)",
+            "MacBookAir10,1": "MacBook Air (M1, 2020)",
+            "MacBookPro17,1": "MacBook Pro (13-inch, M1, 2020)",
             "MacBookPro18,1": "MacBook Pro (16-inch, 2021)",
-            "MacBookPro18,2": "MacBook Pro (16-inch, M1 Max, 2021)"
+            "MacBookPro18,2": "MacBook Pro (16-inch, M1 Max, 2021)",
+            "MacBookPro18,3": "MacBook Pro (14-inch, M1 Pro, 2021)",
+            "MacBookPro18,4": "MacBook Pro (14-inch, M1 Max, 2021)",
+            "iMac21,1": "iMac (24-inch, M1, 2021)",
+            "iMac21,2": "iMac (24-inch, 4 Ports, M1, 2021)"
         ]
         return knownModels[model] ?? "Mac (\(model))"
     }

@@ -53,6 +53,22 @@ public struct ProcessRowView: View {
         !activeChildren.isEmpty
     }
 
+    private var cpuDisplay: String {
+        hasActiveChildren ? process.formattedTotalCPU : process.formattedCPU
+    }
+
+    private var memDisplay: String {
+        hasActiveChildren ? process.formattedTotalMemory : process.formattedMemory
+    }
+
+    private var diskDisplay: String {
+        hasActiveChildren ? process.formattedTotalDiskIO : process.formattedDiskIO
+    }
+
+    private var cpuValue: Double {
+        hasActiveChildren ? process.totalCPU : process.cpuPercentage
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             // Main Process Row
@@ -171,12 +187,6 @@ public struct ProcessRowView: View {
 
                 Spacer()
 
-                // Metrics
-                let cpuDisplay = hasActiveChildren ? process.formattedTotalCPU : process.formattedCPU
-                let memDisplay = hasActiveChildren ? process.formattedTotalMemory : process.formattedMemory
-                let diskDisplay = hasActiveChildren ? process.formattedTotalDiskIO : process.formattedDiskIO
-                let cpuValue = hasActiveChildren ? process.totalCPU : process.cpuPercentage
-
                 switch mode {
                 case .cpu:
                     Text(cpuDisplay)
@@ -191,35 +201,34 @@ public struct ProcessRowView: View {
                         .foregroundStyle(.secondary)
 
                 case .both:
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         Text(cpuDisplay)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .monospacedDigit()
                             .foregroundStyle(cpuValue > 40.0 ? AdaptiveColor.critical : .secondary)
-                            .frame(width: 58, alignment: .trailing)
+                            .frame(width: 70, alignment: .trailing)
 
                         Text(memDisplay)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
-                            .frame(width: 70, alignment: .trailing)
+                            .frame(width: 80, alignment: .trailing)
 
                         Text(diskDisplay)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
-                            .frame(width: 75, alignment: .trailing)
+                            .frame(width: 80, alignment: .trailing)
                     }
                 }
 
-                // Hover terminate button (only for real, non-protected processes)
-                if isHovered {
+                // Static frame for hover terminate button to eliminate layout jitter
+                Group {
                     if process.isProtected {
                         Image(systemName: "lock.shield.fill")
                             .font(.system(size: 13))
                             .foregroundStyle(.tertiary)
                             .help("Protected macOS System Process")
-                            .transition(.opacity)
                     } else if process.id > 1 {
                         Button {
                             showingTerminateAlert = true
@@ -230,9 +239,12 @@ public struct ProcessRowView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Quit Process (SIGTERM)...")
-                        .transition(.opacity)
+                        .accessibilityLabel("Quit process \(process.name)")
                     }
                 }
+                .frame(width: 22, height: 22)
+                .opacity(isHovered ? 1.0 : 0.0)
+                .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
             .padding(.vertical, isChild ? 2 : 5)
             .padding(.horizontal, 6)
@@ -242,6 +254,10 @@ public struct ProcessRowView: View {
                     .fill(isHovered ? Color.primary.opacity(0.06) : Color.clear)
             )
             .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(isChild ? "Child process \(process.name), PID \(process.id)" : "\(process.name), PID \(process.id)")
+            .accessibilityValue("CPU: \(cpuDisplay), Memory: \(memDisplay), Disk: \(diskDisplay)")
+            .accessibilityHint(hasActiveChildren ? (isExpanded ? "Double tap to collapse child processes." : "Double tap to expand child processes.") : "Double click to open process inspector.")
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
                     if process.id > 0 {
